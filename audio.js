@@ -57,7 +57,17 @@ function updateLoadingUI(show) {
 let currentAudioContext = null;
 let currentSource = null;
 
+function isFiniteAudio(float32Array) {
+  for (let i = 0; i < float32Array.length; i++) {
+    if (!isFinite(float32Array[i])) return false;
+  }
+  return true;
+}
+
 function playAudioBuffer(float32Array, sampleRate) {
+  if (!isFiniteAudio(float32Array)) {
+    throw new Error('Non‑finite audio data from Kokoro');
+  }
   stopSpeaking();
   const ctx = new (window.AudioContext || window.webkitAudioContext)();
   currentAudioContext = ctx;
@@ -120,7 +130,7 @@ export async function speak(text, characterId) {
 }
 
 // ---------------------------------------------------------------------------
-// AudioEngine with 3‑second silence timer
+// AudioEngine with 3‑second silence timer, noise gate & fixed wave colour
 // ---------------------------------------------------------------------------
 export class AudioEngine {
   constructor(state, onUserSpeech) {
@@ -168,7 +178,27 @@ export class AudioEngine {
           if (final) this.lastInterimTranscript = final;
           if (interim) this.lastInterimTranscript = final + interim;
 
+          // Silence timer with noise gate
           this.silenceTimeout = setTimeout(() => {
+            // ---- noise gate: measure current volume ----
+            const bufferLength = this.analyser.frequencyBinCount;
+            const dataArray = new Uint8Array(bufferLength);
+            this.analyser.getByteTimeDomainData(dataArray);
+
+            let sum = 0;
+            for (let i = 0; i < bufferLength; i++) {
+              const sample = dataArray[i] / 128.0 - 1.0;
+              sum += sample * sample;
+            }
+            const rms = Math.sqrt(sum / bufferLength);
+
+            // If the volume is too low, ignore the transcript (background noise only)
+            if (rms < 0.05) {
+              console.log('🔇 Noise gate: skipping low‑volume transcript');
+              this.lastInterimTranscript = '';
+              return;
+            }
+
             const transcript = this.lastInterimTranscript.trim();
             if (transcript && this.onUserSpeech) {
               console.log('🎤 final transcript (after silence):', transcript);
@@ -202,8 +232,8 @@ export class AudioEngine {
       this.analyser.getByteTimeDomainData(dataArray);
       ctx.clearRect(0, 0, width, height);
       ctx.lineWidth = 2;
-      const color = getComputedStyle(document.body).getPropertyValue('--text').trim() || '#00bcd4';
-      ctx.strokeStyle = color;
+      // Fixed bright cyan for visibility in any theme
+      ctx.strokeStyle = '#00bcd4';
       ctx.beginPath();
       const sliceWidth = width / bufferLength;
       let x = 0;
