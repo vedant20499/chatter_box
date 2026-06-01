@@ -6,56 +6,57 @@ import { CHARACTERS } from './characters.js';
 export function showModal(id) {
   document.getElementById(id)?.classList.remove('hidden');
 }
-
 export function hideModal(id) {
   document.getElementById(id)?.classList.add('hidden');
 }
 
-// ---------- User display ----------
+// ---------- User display (avatar hidden, only name) ----------
 export function updateUserDisplay(state) {
   const avatar = document.getElementById('user-avatar');
   const nameSpan = document.getElementById('user-name-display');
-  if (state.email || state.name) {
-    avatar.style.display = 'inline-block';
-    avatar.src = state.avatarUrl || 'https://via.placeholder.com/30';
-    nameSpan.textContent = state.name || 'Friend';
+  if (avatar) avatar.style.display = 'none';   // permanently hidden
+  if (state.name) {
+    nameSpan.textContent = state.name;
   } else {
-    avatar.style.display = 'none';
-    nameSpan.textContent = state.name || '';
+    nameSpan.textContent = '';
   }
-
-  // Show Instagram / Spotify buttons if tokens exist? We just keep them visible.
-  document.getElementById('btn-instagram').style.display = 'inline-block';
-  document.getElementById('btn-spotify').style.display = 'inline-block';
 }
 
 // ---------- Settings modal ----------
-export function setupSettingsUI(state, llmEngine, onSave) {
+export function setupSettingsUI(state, llmEngine, onSaveCallback) {
   const charSelect = document.getElementById('character-select');
   const groqInput = document.getElementById('groq-key');
   const cerebrasInput = document.getElementById('cerebras-key');
+  const openrouterInput = document.getElementById('openrouter-key');
   const themeSelect = document.getElementById('theme-toggle');
 
-  // Pre-fill values
   charSelect.value = state.character;
-  groqInput.value = state.llmKeys.groq;
-  cerebrasInput.value = state.llmKeys.cerebras;
+  groqInput.value = state.llmKeys.groq || '';
+  cerebrasInput.value = state.llmKeys.cerebras || '';
+  openrouterInput.value = state.llmKeys.openrouter || '';
   themeSelect.value = document.body.classList.contains('dark') ? 'dark' : 'light';
 
   document.getElementById('btn-save-settings').onclick = () => {
     state.character = charSelect.value;
     state.llmKeys.groq = groqInput.value.trim();
     state.llmKeys.cerebras = cerebrasInput.value.trim();
-    if (llmEngine) llmEngine.setSystemPrompt(CHARACTERS[state.character].prompt);
+    state.llmKeys.openrouter = openrouterInput.value.trim();
+
+    if (llmEngine) {
+      llmEngine.setSystemPrompt(CHARACTERS[state.character].prompt);
+    }
+
     document.body.className = themeSelect.value;
-    window.va && window.va('event', { name: 'settings_saved' });
+    localStorage.setItem('theme', themeSelect.value);
+
+    if (window.va) window.va('event', { name: 'settings_saved' });
     hideModal('modal-settings');
-    if (onSave) onSave();
+    if (onSaveCallback) onSaveCallback();
   };
 
   document.getElementById('btn-download-data').onclick = () => {
     downloadMarkdown(state);
-    window.va && window.va('event', { name: 'data_downloaded' });
+    if (window.va) window.va('event', { name: 'data_downloaded' });
   };
 
   document.getElementById('btn-close-settings').onclick = () => {
@@ -67,7 +68,9 @@ export function setupSettingsUI(state, llmEngine, onSave) {
   });
 }
 
-// ---------- PKCE helpers ----------
+// ---------------------------------------------------------------------------
+// PKCE helpers (used by Instagram & Spotify)
+// ---------------------------------------------------------------------------
 function base64URLEncode(buffer) {
   return btoa(String.fromCharCode(...new Uint8Array(buffer)))
     .replace(/\+/g, '-')
@@ -88,8 +91,10 @@ async function generateCodeChallenge(verifier) {
   return base64URLEncode(hash);
 }
 
-// ---------- Instagram Basic Display (no review) ----------
-const INSTAGRAM_CLIENT_ID = 'YOUR_INSTAGRAM_CLIENT_ID';   // <-- REPLACE
+// ---------------------------------------------------------------------------
+// Instagram Basic Display (no review required)
+// ---------------------------------------------------------------------------
+const INSTAGRAM_CLIENT_ID = 'YOUR_INSTAGRAM_CLIENT_ID';   // <-- Replace with your ID
 
 export function setupInstagramConnect(state, onTokenSaved) {
   const btn = document.getElementById('btn-instagram');
@@ -151,8 +156,10 @@ export async function handleInstagramCallback(state) {
   return false;
 }
 
-// ---------- Spotify PKCE ----------
-const SPOTIFY_CLIENT_ID = 'YOUR_SPOTIFY_CLIENT_ID';   // <-- REPLACE
+// ---------------------------------------------------------------------------
+// Spotify PKCE
+// ---------------------------------------------------------------------------
+const SPOTIFY_CLIENT_ID = 'YOUR_SPOTIFY_CLIENT_ID';   // <-- Replace with your ID
 
 export function setupSpotifyConnect(state, onTokenSaved) {
   const btn = document.getElementById('btn-spotify');
