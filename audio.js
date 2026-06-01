@@ -1,10 +1,120 @@
 // audio.js
-import { getVoiceForCharacter } from './characters.js';
+import { getVoiceForCharacter, CHARACTERS } from './characters.js';
+import { KokoroTTS } from 'kokoro-js';
 
+// --------------------- Kokoro TTS setup ---------------------
+let kokoroTTS = null;
+let kokoroLoadPromise = null;
+let isLoading = false;
+
+let currentAudioContext = null;
+let currentSource = null;
+
+async function loadKokoro() {
+  if (kokoroTTS) return kokoroTTS;
+  if (kokoroLoadPromise) return kokoroLoadPromise;
+
+  isLoading = true;
+  updateLoadingUI(true);
+
+  kokoroLoadPromise = (async () => {
+    try {
+      console.log('🔄 Loading Kokoro TTS model (~80MB) …');
+      kokoroTTS = await KokoroTTS.from_pretrained(
+        'onnx-community/Kokoro-82M-ONNX',
+        { dtype: 'q8' }
+      );
+      console.log('✅ Kokoro ready');
+      return kokoroTTS;
+    } catch (err) {
+      console.error('❌ Kokoro failed:', err);
+      kokoroTTS = null;
+      throw err;
+    } finally {
+      isLoading = false;
+      updateLoadingUI(false);
+    }
+  })();
+
+  return kokoroLoadPromise;
+}
+
+function updateLoadingUI(show) {
+  const face = document.getElementById('face-circle');
+  if (!face) return;
+  if (show) {
+    face.dataset.prevText = face.textContent;
+    face.textContent = '⏳';
+  } else {
+    face.textContent = face.dataset.prevText || '😊';
+    delete face.dataset.prevText;
+  }
+}
+
+function playAudioBuffer(float32Array, sampleRate) {
+  stopSpeaking();
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  currentAudioContext = ctx;
+  const audioBuffer = ctx.createBuffer(1, float32Array.length, sampleRate);
+  audioBuffer.getChannelData(0).set(float32Array);
+  const source = ctx.createBufferSource();
+  source.buffer = audioBuffer;
+  source.connect(ctx.destination);
+  source.start(0);
+  currentSource = source;
+}
+
+export function stopSpeaking() {
+  try {
+    if (currentSource) { currentSource.stop(); currentSource = null; }
+    if (currentAudioContext && currentAudioContext.state !== 'closed') {
+      currentAudioContext.close();
+      currentAudioContext = null;
+    }
+  } catch (e) { /* ignore */ }
+  speechSynthesis.cancel();
+}
+
+function getKokoroVoice(characterId) {
+  const char = CHARACTERS[characterId];
+  return char?.kokoroVoice || null;
+}
+
+// Public speak function – Kokoro first, then Web Speech API fallback
+export async function speak(text, characterId) {
+  if (!text) return;
+
+  try {
+    await loadKokoro();
+    if (kokoroTTS) {
+      const voiceName = getKokoroVoice(characterId);
+      if (voiceName) {
+        const result = await kokoroTTS.generate(text, { voice: voiceName });
+        playAudioBuffer(result.audio, result.sample_rate);
+        return;
+      }
+    }
+  } catch (err) {
+    console.warn('Kokoro TTS failed, falling back to Web Speech:', err);
+  }
+
+  // Fallback
+  const utterance = new SpeechSynthesisUtterance(text);
+  const voice = getVoiceForCharacter(characterId);
+  if (voice) utterance.voice = voice;
+  const voiceConfig = CHARACTERS[characterId]?.voiceConfig;
+  if (voiceConfig) {
+    utterance.pitch = voiceConfig.pitch || 1;
+    utterance.rate = voiceConfig.rate || 1;
+  }
+  speechSynthesis.speak(utterance);
+}
+
+// --------------------- Silence‑based Speech Recognition ---------------------
 export class AudioEngine {
   constructor(state, onUserSpeech) {
     this.state = state;
-    this.onUserSpeech = onUserSpeech;   // callback(transcript)
+    this.onUserSpeech = onUserSpeech;       // called with final transcript
     this.stream = null;
     this.audioCtx = null;
     this.analyser = null;
@@ -12,47 +122,70 @@ export class AudioEngine {
     this.isRunning = false;
     this.musicCooldown = false;
     this.animationFrame = null;
+
+    // Silence timer
+    this.silenceTimeout = null;
+    this.lastInterimTranscript = '';
+    this.SILENCE_DELAY = 3000;   // 3 seconds
   }
 
-  // Start the microphone, visualizer, sound classification, and speech recognition
   async start() {
     try {
-      // 1. Get microphone stream
       this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
-      // 2. Create audio context and analyser for wave visualisation
       this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       const source = this.audioCtx.createMediaStreamSource(this.stream);
       this.analyser = this.audioCtx.createAnalyser();
       this.analyser.fftSize = 256;
       source.connect(this.analyser);
 
-      // 3. Start wave drawing
       this.drawWaves();
-
-      // 4. Start ambient sound classification loop (simplified)
       this.soundClassifyLoop();
 
-      // 5. Start Web Speech API recognition (if available)
+      // Speech recognition with interim results + silence timer
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       if (SpeechRecognition) {
         this.recognition = new SpeechRecognition();
         this.recognition.continuous = true;
-        this.recognition.interimResults = false;
+        this.recognition.interimResults = true;   // 👈 capture partial speech
         this.recognition.lang = 'en-US';
 
         this.recognition.onresult = (event) => {
-          const last = event.results.length - 1;
-          const transcript = event.results[last][0].transcript.trim();
-            console.log('🎤 transcript:', transcript);
-          if (transcript && this.onUserSpeech) {
-            this.onUserSpeech(transcript);
+          clearTimeout(this.silenceTimeout);
+          let interim = '';
+          let final = '';
+
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            const transcript = event.results[i][0].transcript;
+            if (event.results[i].isFinal) {
+              final += transcript;
+            } else {
+              interim += transcript;
+            }
           }
+
+          // Store latest interim/final
+          if (final) this.lastInterimTranscript = final;
+          if (interim) this.lastInterimTranscript = final + interim;
+
+          // Start silence timer – if no new speech for 3s, send transcript
+          this.silenceTimeout = setTimeout(() => {
+            const transcript = this.lastInterimTranscript.trim();
+            if (transcript && this.onUserSpeech) {
+              console.log('🎤 final transcript (after silence):', transcript);
+              this.onUserSpeech(transcript);
+              this.lastInterimTranscript = '';
+            }
+          }, this.SILENCE_DELAY);
         };
 
         this.recognition.onerror = (event) => {
-          // Ignore common non-critical errors (e.g., 'no-speech')
           console.warn('Speech recognition error:', event.error);
+          clearTimeout(this.silenceTimeout);
+        };
+
+        this.recognition.onend = () => {
+          // Restart if still running (continuous mode often ends after a pause)
+          if (this.isRunning) this.recognition.start();
         };
 
         this.recognition.start();
@@ -61,15 +194,12 @@ export class AudioEngine {
       this.isRunning = true;
     } catch (error) {
       console.error('Could not access microphone:', error);
-      // The app can still work without a mic (manual text input later)
     }
   }
 
-  // Animate the circular wave visualizer using canvas
   drawWaves() {
     const canvas = document.getElementById('wave-canvas');
     if (!canvas) return;
-
     const ctx = canvas.getContext('2d');
     const width = canvas.width;
     const height = canvas.height;
@@ -78,93 +208,50 @@ export class AudioEngine {
 
     const draw = () => {
       if (!this.isRunning) return;
-
       this.animationFrame = requestAnimationFrame(draw);
-
       this.analyser.getByteTimeDomainData(dataArray);
-
       ctx.clearRect(0, 0, width, height);
       ctx.lineWidth = 2;
-      ctx.strokeStyle = getComputedStyle(document.body).getPropertyValue('--text').trim() || '#00bcd4';
+      const color = getComputedStyle(document.body).getPropertyValue('--text').trim() || '#00bcd4';
+      ctx.strokeStyle = color;
       ctx.beginPath();
-
       const sliceWidth = width / bufferLength;
       let x = 0;
-
       for (let i = 0; i < bufferLength; i++) {
         const v = dataArray[i] / 128.0;
         const y = (v * height) / 2;
-        if (i === 0) {
-          ctx.moveTo(x, y);
-        } else {
-          ctx.lineTo(x, y);
-        }
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
         x += sliceWidth;
       }
-
       ctx.lineTo(width, height / 2);
       ctx.stroke();
     };
-
     draw();
   }
 
-  // Simple ambient sound classifier (music detection simulated)
   soundClassifyLoop() {
     setInterval(() => {
       if (!this.isRunning) return;
-
-      // In a full version, run YAMNet on a short audio buffer here.
-      // For now, we simulate a music detection event occasionally.
-      // The cooldown prevents spamming "What song is this?".
       if (Math.random() < 0.05 && !this.musicCooldown) {
-        if (this.onUserSpeech) {
-          this.onUserSpeech('__MUSIC_DETECTED__');
-        }
+        if (this.onUserSpeech) this.onUserSpeech('__MUSIC_DETECTED__');
         this.musicCooldown = true;
-        setTimeout(() => {
-          this.musicCooldown = false;
-        }, 30000);   // 30 seconds cooldown
+        setTimeout(() => { this.musicCooldown = false; }, 30000);
       }
     }, 5000);
   }
 
-  // Speak a phrase using TTS with character-specific voice, pitch and rate
+  // Compatibility wrapper – calls the new top‑level speak function
   speak(text, characterId) {
-    if (!this.isRunning) return;
-
-    const utterance = new SpeechSynthesisUtterance(text);
-
-    // Get the best matching voice
-    const voice = getVoiceForCharacter(characterId);
-    if (voice) utterance.voice = voice;
-
-    // Apply pitch and rate from character config
-    const config = (window.CHARACTERS && window.CHARACTERS[characterId]?.voiceConfig) || {};
-    utterance.pitch = config.pitch || 1;
-    utterance.rate = config.rate || 1;
-
-    speechSynthesis.speak(utterance);
+    speak(text, characterId);
   }
 
-  // Clean up all resources
   stop() {
     this.isRunning = false;
-
-    if (this.recognition) {
-      this.recognition.stop();
-    }
-
-    if (this.stream) {
-      this.stream.getTracks().forEach(track => track.stop());
-    }
-
-    if (this.audioCtx && this.audioCtx.state !== 'closed') {
-      this.audioCtx.close();
-    }
-
-    if (this.animationFrame) {
-      cancelAnimationFrame(this.animationFrame);
-    }
+    clearTimeout(this.silenceTimeout);
+    if (this.recognition) this.recognition.stop();
+    if (this.stream) this.stream.getTracks().forEach(t => t.stop());
+    if (this.audioCtx && this.audioCtx.state !== 'closed') this.audioCtx.close();
+    if (this.animationFrame) cancelAnimationFrame(this.animationFrame);
   }
 }
