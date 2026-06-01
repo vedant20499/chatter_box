@@ -10,7 +10,6 @@ export class LLMEngine {
     this.systemPrompt = prompt;
   }
 
-  // Main chat method – tries Groq first, then Cerebras, then sleep state
   async chat(userMessage) {
     if (!this.state.llmKeys.groq && !this.state.llmKeys.cerebras) {
       return "I need an API key. Set it in settings.";
@@ -24,7 +23,7 @@ export class LLMEngine {
 
     let response;
 
-    // Try Groq
+    // Try Groq first
     if (!this.exhausted.groq && this.state.llmKeys.groq) {
       try {
         response = await this.callGroq(messages);
@@ -52,7 +51,6 @@ export class LLMEngine {
       }
     }
 
-    // Both exhausted or no keys → sleep
     if (!response) {
       document.getElementById('face-circle').textContent = '😴';
       return "Looks like we're out of free tokens. Let's talk later... 😴";
@@ -94,7 +92,7 @@ export class LLMEngine {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: 'llama3.1-70b',   // ✅ CORRECT model name for Cerebras
+        model: 'gpt-oss-120b',   // ✅ correct model name for Cerebras
         messages,
         max_tokens: 150,
         temperature: 0.9
