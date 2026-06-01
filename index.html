@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
   <title>Friend AI</title>
   <link rel="stylesheet" href="style.css">
-  <script defer src="/_vercel/insights/script.js"></script>
 </head>
 <body class="light">
   <div id="app">
@@ -50,6 +49,18 @@
     </div>
   </div>
 
+  <!-- SSO (Connect Accounts) -->
+  <div id="modal-sso" class="modal hidden">
+    <div class="modal-content">
+      <h2>Connect Your Accounts</h2>
+      <p style="font-size:0.9rem; color: #888;">(Coming soon)</p>
+      <button id="btn-google">Sign in with Google</button>
+      <button id="btn-instagram-sso">Connect Instagram</button>
+      <button id="btn-spotify-sso">Connect Spotify</button>
+      <button id="btn-skip">Skip for now</button>
+    </div>
+  </div>
+
   <!-- Settings -->
   <div id="modal-settings" class="modal hidden">
     <div class="modal-content">
@@ -68,6 +79,8 @@
       <input type="password" id="groq-key" placeholder="gsk_...">
       <label>Cerebras API Key</label>
       <input type="password" id="cerebras-key" placeholder="csk_...">
+      <label>OpenRouter API Key</label>
+      <input type="password" id="openrouter-key" placeholder="sk-or-...">
       <label>Theme</label>
       <select id="theme-toggle">
         <option value="light">Light</option>
@@ -79,14 +92,13 @@
     </div>
   </div>
 
-  <!-- Kokoro-js import map (must be before the app script) -->
-<script type="importmap">
-{
-  "imports": {
-    "kokoro-js": "https://cdn.jsdelivr.net/npm/kokoro-js@0.1.0/dist/kokoro.mjs"
+  <script type="importmap">
+  {
+    "imports": {
+      "kokoro-js": "https://cdn.jsdelivr.net/npm/kokoro-js@0.1.0/dist/kokoro.mjs"
+    }
   }
-}
-</script>
+  </script>
   <script type="module" src="app.js"></script>
 </body>
 </html>
