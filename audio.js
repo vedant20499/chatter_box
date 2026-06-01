@@ -2,17 +2,16 @@
 import { getVoiceForCharacter, CHARACTERS } from './characters.js';
 
 // ---------------------------------------------------------------------------
-// Kokoro TTS (loaded dynamically to avoid breaking the app)
+// Kokoro TTS (dynamic import, safe fallback)
 // ---------------------------------------------------------------------------
 let kokoroTTS = null;
 let kokoroLoadPromise = null;
 let isLoading = false;
-let kokoroAvailable = true;   // assume it will work, set to false if import fails
+let kokoroAvailable = true;
 
 async function loadKokoro() {
   if (kokoroTTS) return kokoroTTS;
   if (kokoroLoadPromise) return kokoroLoadPromise;
-
   if (!kokoroAvailable) throw new Error('Kokoro unavailable');
 
   isLoading = true;
@@ -20,7 +19,6 @@ async function loadKokoro() {
 
   kokoroLoadPromise = (async () => {
     try {
-      // Dynamic import – if this fails, kokoroAvailable becomes false
       const { KokoroTTS } = await import('kokoro-js');
       console.log('🔄 Loading Kokoro TTS model (~80MB) …');
       kokoroTTS = await KokoroTTS.from_pretrained(
@@ -30,7 +28,7 @@ async function loadKokoro() {
       console.log('✅ Kokoro ready');
       return kokoroTTS;
     } catch (err) {
-      console.error('❌ Kokoro failed to load:', err);
+      console.error('❌ Kokoro failed:', err);
       kokoroAvailable = false;
       kokoroTTS = null;
       throw err;
@@ -83,17 +81,20 @@ export function stopSpeaking() {
   speechSynthesis.cancel();
 }
 
-// Public speak function – tries Kokoro first, then Web Speech
+function getKokoroVoice(characterId) {
+  const char = CHARACTERS[characterId];
+  return char?.kokoroVoice || null;
+}
+
+// Public speak function – Kokoro first, then Web Speech API
 export async function speak(text, characterId) {
   if (!text) return;
 
-  // Try Kokoro if it hasn't failed previously
   if (kokoroAvailable) {
     try {
       await loadKokoro();
       if (kokoroTTS) {
-        const char = CHARACTERS[characterId];
-        const voiceName = char?.kokoroVoice;
+        const voiceName = getKokoroVoice(characterId);
         if (voiceName) {
           const result = await kokoroTTS.generate(text, { voice: voiceName });
           playAudioBuffer(result.audio, result.sample_rate);
@@ -101,7 +102,6 @@ export async function speak(text, characterId) {
         }
       }
     } catch (err) {
-      // Kokoro failed – fall through to Web Speech
       console.warn('Kokoro TTS failed, using browser TTS:', err.message);
     }
   }
@@ -135,7 +135,7 @@ export class AudioEngine {
     this.animationFrame = null;
     this.silenceTimeout = null;
     this.lastInterimTranscript = '';
-    this.SILENCE_DELAY = 3000;   // 3 seconds of silence before sending
+    this.SILENCE_DELAY = 3000;
   }
 
   async start() {
@@ -154,27 +154,20 @@ export class AudioEngine {
       if (SpeechRecognition) {
         this.recognition = new SpeechRecognition();
         this.recognition.continuous = true;
-        this.recognition.interimResults = true;   // capture partial speech
+        this.recognition.interimResults = true;
         this.recognition.lang = 'en-US';
 
         this.recognition.onresult = (event) => {
           clearTimeout(this.silenceTimeout);
-          let interim = '';
-          let final = '';
-
+          let interim = '', final = '';
           for (let i = event.resultIndex; i < event.results.length; i++) {
-            const transcript = event.results[i][0].transcript;
-            if (event.results[i].isFinal) {
-              final += transcript;
-            } else {
-              interim += transcript;
-            }
+            const t = event.results[i][0].transcript;
+            if (event.results[i].isFinal) final += t;
+            else interim += t;
           }
-
           if (final) this.lastInterimTranscript = final;
           if (interim) this.lastInterimTranscript = final + interim;
 
-          // Start silence timer – after 3s of no speech, send the transcript
           this.silenceTimeout = setTimeout(() => {
             const transcript = this.lastInterimTranscript.trim();
             if (transcript && this.onUserSpeech) {
@@ -185,21 +178,13 @@ export class AudioEngine {
           }, this.SILENCE_DELAY);
         };
 
-        this.recognition.onerror = (event) => {
-          console.warn('Speech recognition error:', event.error);
-          clearTimeout(this.silenceTimeout);
-        };
-
-        this.recognition.onend = () => {
-          if (this.isRunning) this.recognition.start();
-        };
-
+        this.recognition.onerror = (e) => console.warn('Speech recog error:', e.error);
+        this.recognition.onend = () => { if (this.isRunning) this.recognition.start(); };
         this.recognition.start();
       }
-
       this.isRunning = true;
-    } catch (error) {
-      console.error('Microphone access failed:', error);
+    } catch (err) {
+      console.error('Mic access failed:', err);
     }
   }
 
@@ -207,8 +192,7 @@ export class AudioEngine {
     const canvas = document.getElementById('wave-canvas');
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
-    const width = canvas.width;
-    const height = canvas.height;
+    const width = canvas.width, height = canvas.height;
     const bufferLength = this.analyser.frequencyBinCount;
     const dataArray = new Uint8Array(bufferLength);
 
