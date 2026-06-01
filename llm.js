@@ -1,4 +1,4 @@
-// llm.js
+// llm.js (Cerebras model: gpt-oss-120b)
 export class LLMEngine {
   constructor(state) {
     this.state = state;
@@ -6,9 +6,7 @@ export class LLMEngine {
     this.exhausted = { groq: false, cerebras: false };
   }
 
-  setSystemPrompt(prompt) {
-    this.systemPrompt = prompt;
-  }
+  setSystemPrompt(prompt) { this.systemPrompt = prompt; }
 
   async chat(userMessage) {
     if (!this.state.llmKeys.groq && !this.state.llmKeys.cerebras) {
@@ -55,7 +53,6 @@ export class LLMEngine {
       document.getElementById('face-circle').textContent = '😴';
       return "Looks like we're out of free tokens. Let's talk later... 😴";
     }
-
     return response;
   }
 
@@ -73,13 +70,11 @@ export class LLMEngine {
         temperature: 0.9
       })
     });
-
     if (!res.ok) {
       if (res.status === 429) throw new Error('429');
       const errorText = await res.text();
       throw new Error(`Groq API error (${res.status}): ${errorText}`);
     }
-
     const data = await res.json();
     return data.choices[0].message.content;
   }
@@ -92,19 +87,17 @@ export class LLMEngine {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: 'gpt-oss-120b',   // ✅ correct model name for Cerebras
+        model: 'gpt-oss-120b',
         messages,
         max_tokens: 150,
         temperature: 0.9
       })
     });
-
     if (!res.ok) {
       if (res.status === 429) throw new Error('429');
       const errorText = await res.text();
       throw new Error(`Cerebras API error (${res.status}): ${errorText}`);
     }
-
     const data = await res.json();
     return data.choices[0].message.content;
   }
