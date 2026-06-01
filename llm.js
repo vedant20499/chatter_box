@@ -33,7 +33,6 @@ export class LLMEngine {
           this.exhausted.groq = true;
           console.warn('Groq quota exhausted, switching to Cerebras.');
         } else {
-          // For other errors (network, etc.) we still fall back to Cerebras
           console.error('Groq error:', e.message);
         }
       }
@@ -95,7 +94,7 @@ export class LLMEngine {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: 'cerebras-llama3-70b',
+        model: 'llama3.1-70b',   // ✅ CORRECT model name for Cerebras
         messages,
         max_tokens: 150,
         temperature: 0.9
