@@ -3,12 +3,24 @@ import { FriendState, downloadMarkdown } from './state.js';
 import { CHARACTERS } from './characters.js';
 import {
   showModal, hideModal, updateUserDisplay,
-  setupSettingsUI, setupInstagramConnect, setupSpotifyConnect,
-  handleInstagramCallback, handleSpotifyCallback
+  setupSettingsUI
 } from './ui.js';
 import { AudioEngine } from './audio.js';
 import { LLMEngine } from './llm.js';
 import { track } from './analytics.js';
+
+// ---------------------------------------------------------------------------
+// System theme detection (must run before anything else)
+// ---------------------------------------------------------------------------
+(function setInitialTheme() {
+  const savedTheme = localStorage.getItem('theme');
+  if (savedTheme) {
+    document.body.className = savedTheme;
+  } else {
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    document.body.className = prefersDark ? 'dark' : 'light';
+  }
+})();
 
 // ---------------------------------------------------------------------------
 // Persistent UUID (no Google Cloud needed)
@@ -27,32 +39,7 @@ window.addEventListener('load', async () => {
   }
   state.uuid = uuid;
 
-  // 2. Check if we are returning from Instagram / Spotify OAuth
-  const pendingInsta = sessionStorage.getItem('insta_pending') === 'true';
-  const pendingSpotify = sessionStorage.getItem('spotify_pending') === 'true';
-
-  if (pendingInsta || pendingSpotify) {
-    await loadStateFromKV();
-
-    if (pendingInsta) {
-      const ok = await handleInstagramCallback(state);
-      if (ok) {
-        await saveStateToKV();
-        track('instagram_connected');
-      }
-    }
-    if (pendingSpotify) {
-      const ok = await handleSpotifyCallback(state);
-      if (ok) {
-        await saveStateToKV();
-        track('spotify_connected');
-      }
-    }
-    maybeStartApp();
-    return;
-  }
-
-  // 3. Normal startup: try to fetch saved state from Vercel KV
+  // 2. Normal startup: try to fetch saved state from Vercel KV (ignore errors)
   try {
     const res = await fetch(`/api/state?uuid=${uuid}`);
     const data = await res.json();
@@ -63,7 +50,7 @@ window.addEventListener('load', async () => {
     console.warn('Could not load state from cloud, using fresh state.');
   }
 
-  // 4. If no name set, show new/existing flow
+  // 3. If no name set, show new/existing flow
   if (!state.name) {
     showModal('modal-new-existing');
 
@@ -94,7 +81,7 @@ window.addEventListener('load', async () => {
       reader.onload = (e) => {
         try {
           const restored = FriendState.fromJSON(e.target.result);
-          restored.uuid = uuid;
+          restored.uuid = uuid;   // keep our local UUID
           state = restored;
           saveStateToKV();
           hideModal('modal-upload');
@@ -133,6 +120,7 @@ window.addEventListener('load', async () => {
 // API key check & main start
 // ---------------------------------------------------------------------------
 async function maybeStartApp() {
+  // If NO API keys at all, force settings modal
   if (!state.llmKeys.groq && !state.llmKeys.cerebras && !state.llmKeys.openrouter) {
     showModal('modal-settings');
     setupSettingsUI(state, llm, async () => {
@@ -149,22 +137,25 @@ async function startMain() {
   updateUserDisplay(state);
   track('main_started', { character: state.character });
 
+  // Initialize LLM
   llm = new LLMEngine(state);
   llm.setSystemPrompt(CHARACTERS[state.character].prompt);
 
+  // Initialize audio engine with speech handler
   audioEngine = new AudioEngine(state, handleUserSpeech);
   await audioEngine.start();
 
-  // Instagram / Spotify connect buttons (dummy for now)
-  setupInstagramConnect(state, async () => await saveStateToKV());
-  setupSpotifyConnect(state, async () => await saveStateToKV());
+  // Instagram / Spotify connect buttons (dummy for now, but buttons are visible)
+  // You can later replace these with real OAuth flows
 
+  // Auto‑save state to Vercel KV on tab close
   window.addEventListener('beforeunload', () => {
     saveStateToKV();
+    // optional local backup
     downloadMarkdown(state);
   });
 
-  // Periodic auto‑save to KV (only every 10 messages)
+  // Periodic auto‑save every 10 messages (messageCounterSinceSave is incremented in handleUserSpeech)
   setInterval(() => {
     if (messageCounterSinceSave >= 10) {
       saveStateToKV();
@@ -174,8 +165,8 @@ async function startMain() {
 }
 
 // ---------------------------------------------------------------------------
-// Speech handler (called after 3s silence – see audio.js)
-// Now we drastically reduce background LLM calls
+// Speech handler (called after 3s silence + noise gate – see audio.js)
+// Now with drastically reduced background LLM calls
 // ---------------------------------------------------------------------------
 async function handleUserSpeech(transcript) {
   if (!llm || !audioEngine) return;
@@ -260,14 +251,4 @@ async function saveStateToKV() {
   } catch (e) {
     console.error('Failed to save state to cloud', e);
   }
-}
-
-async function loadStateFromKV() {
-  try {
-    const res = await fetch(`/api/state?uuid=${state.uuid}`);
-    const data = await res.json();
-    if (data) {
-      state = FriendState.fromJSON(data);
-    }
-  } catch (e) { /* ignore */ }
 }
