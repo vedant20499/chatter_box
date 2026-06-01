@@ -32,7 +32,6 @@ window.addEventListener('load', async () => {
   const pendingSpotify = sessionStorage.getItem('spotify_pending') === 'true';
 
   if (pendingInsta || pendingSpotify) {
-    // Load current state from KV (so we don't lose anything)
     await loadStateFromKV();
 
     if (pendingInsta) {
@@ -49,7 +48,6 @@ window.addEventListener('load', async () => {
         track('spotify_connected');
       }
     }
-    // Continue to main app
     maybeStartApp();
     return;
   }
@@ -79,13 +77,13 @@ window.addEventListener('load', async () => {
       showModal('modal-upload');
     };
 
-    // Name submitted
+    // Name submitted → show SSO modal (dummy buttons)
     document.getElementById('btn-name-next').onclick = () => {
       const name = document.getElementById('name-input').value.trim();
       if (!name) return alert('Please enter a name');
       state.name = name;
       hideModal('modal-name');
-      maybeStartApp();
+      showModal('modal-sso');
     };
 
     // Upload Markdown file for restoration
@@ -96,7 +94,7 @@ window.addEventListener('load', async () => {
       reader.onload = (e) => {
         try {
           const restored = FriendState.fromJSON(e.target.result);
-          restored.uuid = uuid;   // keep our local UUID
+          restored.uuid = uuid;
           state = restored;
           saveStateToKV();
           hideModal('modal-upload');
@@ -106,6 +104,16 @@ window.addEventListener('load', async () => {
         }
       };
       reader.readAsText(file);
+    };
+
+    // ---------- SSO dummy buttons ----------
+    document.getElementById('btn-google').onclick = () => alert('Google Sign‑In coming soon!');
+    document.getElementById('btn-instagram-sso').onclick = () => alert('Instagram connect coming soon!');
+    document.getElementById('btn-spotify-sso').onclick = () => alert('Spotify connect coming soon!');
+
+    document.getElementById('btn-skip').onclick = () => {
+      hideModal('modal-sso');
+      maybeStartApp();
     };
   } else {
     // Returning user – go straight to the app
@@ -125,8 +133,7 @@ window.addEventListener('load', async () => {
 // API key check & main start
 // ---------------------------------------------------------------------------
 async function maybeStartApp() {
-  if (!state.llmKeys.groq && !state.llmKeys.cerebras) {
-    // Force settings – override save to start the app afterward
+  if (!state.llmKeys.groq && !state.llmKeys.cerebras && !state.llmKeys.openrouter) {
     showModal('modal-settings');
     setupSettingsUI(state, llm, async () => {
       hideModal('modal-settings');
@@ -142,44 +149,38 @@ async function startMain() {
   updateUserDisplay(state);
   track('main_started', { character: state.character });
 
-  // Initialize LLM
   llm = new LLMEngine(state);
   llm.setSystemPrompt(CHARACTERS[state.character].prompt);
 
-  // Initialize audio engine with speech handler
   audioEngine = new AudioEngine(state, handleUserSpeech);
   await audioEngine.start();
 
-  // Instagram / Spotify connect buttons (already in the header)
+  // Instagram / Spotify connect buttons (dummy for now)
   setupInstagramConnect(state, async () => await saveStateToKV());
   setupSpotifyConnect(state, async () => await saveStateToKV());
 
-  // Auto-save state to Vercel KV on tab close
   window.addEventListener('beforeunload', () => {
     saveStateToKV();
-    // optional local backup
     downloadMarkdown(state);
   });
 
-  // Periodic auto-save every 10 messages
+  // Periodic auto‑save to KV (only every 10 messages)
   setInterval(() => {
     if (messageCounterSinceSave >= 10) {
       saveStateToKV();
       messageCounterSinceSave = 0;
     }
   }, 3000);
-
-  // (Optional) Proactive chat loop – if no speech detected for a while, start a conversation
-  // For now, the audio engine already handles music detection and STT;
-  // you can extend with a silence timer inside audio.js if desired.
 }
 
 // ---------------------------------------------------------------------------
-// Speech handler (called by AudioEngine)
+// Speech handler (called after 3s silence – see audio.js)
+// Now we drastically reduce background LLM calls
 // ---------------------------------------------------------------------------
 async function handleUserSpeech(transcript) {
   if (!llm || !audioEngine) return;
 
+  // Special marker for music detection
   if (transcript === '__MUSIC_DETECTED__') {
     const text = "I hear music. What song is this?";
     audioEngine.speak(text, state.character);
@@ -199,24 +200,14 @@ async function handleUserSpeech(transcript) {
   state.compactedContext.push({ role: 'assistant', content: response });
   track('message_exchanged', { count: state.messageCount });
 
-  // ---- background tasks (only run occasionally, and AFTER the user heard the reply) ----
-  // Delay to avoid rate limiting, then do one task at most
+  // Background tasks: run rarely and with a delay to avoid rate limits
   setTimeout(async () => {
-    if (state.messageCount % 30 === 0) await compactContext();
-    else if (state.messageCount % 80 === 0) await updatePersonality();
-  }, 600);   // small delay
-}
-  // Compaction and personality updates
-  if (state.messageCount % 20 === 0) await compactContext();
-  if (state.messageCount % 50 === 0) await updatePersonality();
-
-  const response = await llm.chat(transcript);
-  if (response) {
-    audioEngine.speak(response, state.character);
-    state.compactedContext.push({ role: 'user', content: transcript });
-    state.compactedContext.push({ role: 'assistant', content: response });
-    track('message_exchanged', { count: state.messageCount });
-  }
+    if (state.messageCount % 30 === 0) {
+      await compactContext();
+    } else if (state.messageCount % 80 === 0) {
+      await updatePersonality();
+    }
+  }, 600);
 }
 
 // ---------------------------------------------------------------------------
@@ -254,7 +245,7 @@ async function updatePersonality() {
 }
 
 // ---------------------------------------------------------------------------
-// Cloud persistence (Vercel KV)
+// Cloud persistence (Vercel KV) – harmless if KV not set up
 // ---------------------------------------------------------------------------
 async function saveStateToKV() {
   try {
