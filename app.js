@@ -180,7 +180,6 @@ async function startMain() {
 async function handleUserSpeech(transcript) {
   if (!llm || !audioEngine) return;
 
-  // Special marker for music detection
   if (transcript === '__MUSIC_DETECTED__') {
     const text = "I hear music. What song is this?";
     audioEngine.speak(text, state.character);
@@ -191,6 +190,22 @@ async function handleUserSpeech(transcript) {
   state.messageCount++;
   messageCounterSinceSave++;
 
+  // Main reply
+  const response = await llm.chat(transcript);
+  if (!response) return;
+
+  audioEngine.speak(response, state.character);
+  state.compactedContext.push({ role: 'user', content: transcript });
+  state.compactedContext.push({ role: 'assistant', content: response });
+  track('message_exchanged', { count: state.messageCount });
+
+  // ---- background tasks (only run occasionally, and AFTER the user heard the reply) ----
+  // Delay to avoid rate limiting, then do one task at most
+  setTimeout(async () => {
+    if (state.messageCount % 30 === 0) await compactContext();
+    else if (state.messageCount % 80 === 0) await updatePersonality();
+  }, 600);   // small delay
+}
   // Compaction and personality updates
   if (state.messageCount % 20 === 0) await compactContext();
   if (state.messageCount % 50 === 0) await updatePersonality();
