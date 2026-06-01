@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Friend AI</title>
+  <link rel="stylesheet" href="style.css">
+  <script defer src="/_vercel/insights/script.js"></script>
+</head>
+<body class="light">
+  <div id="app">
+    <div id="avatar-container">
+      <canvas id="wave-canvas" width="200" height="200"></canvas>
+      <div id="face-circle">😊</div>
+    </div>
+    <div id="user-panel">
+      <img id="user-avatar" src="" alt="User" style="display:none;">
+      <span id="user-name-display"></span>
+      <button id="settings-btn">⚙️</button>
+      <button id="btn-instagram" style="display:none;">📷 Instagram</button>
+      <button id="btn-spotify" style="display:none;">🎵 Spotify</button>
+    </div>
+  </div>
+
+  <!-- New / Existing -->
+  <div id="modal-new-existing" class="modal hidden">
+    <div class="modal-content">
+      <h2>Welcome!</h2>
+      <p>Are you new or returning?</p>
+      <button id="btn-new">I'm New</button>
+      <button id="btn-existing">I Have My Data File</button>
+    </div>
+  </div>
+
+  <!-- Upload Markdown -->
+  <div id="modal-upload" class="modal hidden">
+    <div class="modal-content">
+      <h2>Upload Your Markdown File</h2>
+      <input type="file" id="md-upload" accept=".md,.json">
+      <button id="btn-restore">Restore Session</button>
+    </div>
+  </div>
+
+  <!-- Ask Name -->
+  <div id="modal-name" class="modal hidden">
+    <div class="modal-content">
+      <h2>What should I call you?</h2>
+      <input type="text" id="name-input" placeholder="Your name">
+      <button id="btn-name-next">Next</button>
+    </div>
+  </div>
+
+  <!-- Settings -->
+  <div id="modal-settings" class="modal hidden">
+    <div class="modal-content">
+      <h2>Settings</h2>
+      <label>Character</label>
+      <select id="character-select">
+        <option value="max">Max Black</option>
+        <option value="morgan">Morgan Freeman</option>
+        <option value="chandler">Chandler Bing</option>
+        <option value="rachel">Rachel Green</option>
+        <option value="harley">Harley Quinn</option>
+        <option value="joe">Joe Goldberg</option>
+        <option value="alfred">Alfred Pennyworth</option>
+      </select>
+      <label>Groq API Key</label>
+      <input type="password" id="groq-key" placeholder="gsk_...">
+      <label>Cerebras API Key</label>
+      <input type="password" id="cerebras-key" placeholder="csk_...">
+      <label>Theme</label>
+      <select id="theme-toggle">
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+      </select>
+      <button id="btn-download-data">Download My Data</button>
+      <button id="btn-save-settings">Save</button>
+      <button id="btn-close-settings">Close</button>
+    </div>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
