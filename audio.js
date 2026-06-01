@@ -44,6 +44,7 @@ export class AudioEngine {
         this.recognition.onresult = (event) => {
           const last = event.results.length - 1;
           const transcript = event.results[last][0].transcript.trim();
+            console.log('🎤 transcript:', transcript);
           if (transcript && this.onUserSpeech) {
             this.onUserSpeech(transcript);
           }
