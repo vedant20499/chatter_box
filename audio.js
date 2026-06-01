@@ -1,24 +1,27 @@
 // audio.js
 import { getVoiceForCharacter, CHARACTERS } from './characters.js';
-import { KokoroTTS } from 'kokoro-js';
 
-// --------------------- Kokoro TTS setup ---------------------
+// ---------------------------------------------------------------------------
+// Kokoro TTS (loaded dynamically to avoid breaking the app)
+// ---------------------------------------------------------------------------
 let kokoroTTS = null;
 let kokoroLoadPromise = null;
 let isLoading = false;
-
-let currentAudioContext = null;
-let currentSource = null;
+let kokoroAvailable = true;   // assume it will work, set to false if import fails
 
 async function loadKokoro() {
   if (kokoroTTS) return kokoroTTS;
   if (kokoroLoadPromise) return kokoroLoadPromise;
+
+  if (!kokoroAvailable) throw new Error('Kokoro unavailable');
 
   isLoading = true;
   updateLoadingUI(true);
 
   kokoroLoadPromise = (async () => {
     try {
+      // Dynamic import – if this fails, kokoroAvailable becomes false
+      const { KokoroTTS } = await import('kokoro-js');
       console.log('🔄 Loading Kokoro TTS model (~80MB) …');
       kokoroTTS = await KokoroTTS.from_pretrained(
         'onnx-community/Kokoro-82M-ONNX',
@@ -27,7 +30,8 @@ async function loadKokoro() {
       console.log('✅ Kokoro ready');
       return kokoroTTS;
     } catch (err) {
-      console.error('❌ Kokoro failed:', err);
+      console.error('❌ Kokoro failed to load:', err);
+      kokoroAvailable = false;
       kokoroTTS = null;
       throw err;
     } finally {
@@ -50,6 +54,10 @@ function updateLoadingUI(show) {
     delete face.dataset.prevText;
   }
 }
+
+// Audio playback helpers
+let currentAudioContext = null;
+let currentSource = null;
 
 function playAudioBuffer(float32Array, sampleRate) {
   stopSpeaking();
@@ -75,33 +83,34 @@ export function stopSpeaking() {
   speechSynthesis.cancel();
 }
 
-function getKokoroVoice(characterId) {
-  const char = CHARACTERS[characterId];
-  return char?.kokoroVoice || null;
-}
-
-// Public speak function – Kokoro first, then Web Speech API fallback
+// Public speak function – tries Kokoro first, then Web Speech
 export async function speak(text, characterId) {
   if (!text) return;
 
-  try {
-    await loadKokoro();
-    if (kokoroTTS) {
-      const voiceName = getKokoroVoice(characterId);
-      if (voiceName) {
-        const result = await kokoroTTS.generate(text, { voice: voiceName });
-        playAudioBuffer(result.audio, result.sample_rate);
-        return;
+  // Try Kokoro if it hasn't failed previously
+  if (kokoroAvailable) {
+    try {
+      await loadKokoro();
+      if (kokoroTTS) {
+        const char = CHARACTERS[characterId];
+        const voiceName = char?.kokoroVoice;
+        if (voiceName) {
+          const result = await kokoroTTS.generate(text, { voice: voiceName });
+          playAudioBuffer(result.audio, result.sample_rate);
+          return;
+        }
       }
+    } catch (err) {
+      // Kokoro failed – fall through to Web Speech
+      console.warn('Kokoro TTS failed, using browser TTS:', err.message);
     }
-  } catch (err) {
-    console.warn('Kokoro TTS failed, falling back to Web Speech:', err);
   }
 
-  // Fallback
+  // Fallback: browser Web Speech API
   const utterance = new SpeechSynthesisUtterance(text);
   const voice = getVoiceForCharacter(characterId);
   if (voice) utterance.voice = voice;
+
   const voiceConfig = CHARACTERS[characterId]?.voiceConfig;
   if (voiceConfig) {
     utterance.pitch = voiceConfig.pitch || 1;
@@ -110,11 +119,13 @@ export async function speak(text, characterId) {
   speechSynthesis.speak(utterance);
 }
 
-// --------------------- Silence‑based Speech Recognition ---------------------
+// ---------------------------------------------------------------------------
+// AudioEngine with 3‑second silence timer
+// ---------------------------------------------------------------------------
 export class AudioEngine {
   constructor(state, onUserSpeech) {
     this.state = state;
-    this.onUserSpeech = onUserSpeech;       // called with final transcript
+    this.onUserSpeech = onUserSpeech;
     this.stream = null;
     this.audioCtx = null;
     this.analyser = null;
@@ -122,11 +133,9 @@ export class AudioEngine {
     this.isRunning = false;
     this.musicCooldown = false;
     this.animationFrame = null;
-
-    // Silence timer
     this.silenceTimeout = null;
     this.lastInterimTranscript = '';
-    this.SILENCE_DELAY = 3000;   // 3 seconds
+    this.SILENCE_DELAY = 3000;   // 3 seconds of silence before sending
   }
 
   async start() {
@@ -141,12 +150,11 @@ export class AudioEngine {
       this.drawWaves();
       this.soundClassifyLoop();
 
-      // Speech recognition with interim results + silence timer
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       if (SpeechRecognition) {
         this.recognition = new SpeechRecognition();
         this.recognition.continuous = true;
-        this.recognition.interimResults = true;   // 👈 capture partial speech
+        this.recognition.interimResults = true;   // capture partial speech
         this.recognition.lang = 'en-US';
 
         this.recognition.onresult = (event) => {
@@ -163,11 +171,10 @@ export class AudioEngine {
             }
           }
 
-          // Store latest interim/final
           if (final) this.lastInterimTranscript = final;
           if (interim) this.lastInterimTranscript = final + interim;
 
-          // Start silence timer – if no new speech for 3s, send transcript
+          // Start silence timer – after 3s of no speech, send the transcript
           this.silenceTimeout = setTimeout(() => {
             const transcript = this.lastInterimTranscript.trim();
             if (transcript && this.onUserSpeech) {
@@ -184,7 +191,6 @@ export class AudioEngine {
         };
 
         this.recognition.onend = () => {
-          // Restart if still running (continuous mode often ends after a pause)
           if (this.isRunning) this.recognition.start();
         };
 
@@ -193,7 +199,7 @@ export class AudioEngine {
 
       this.isRunning = true;
     } catch (error) {
-      console.error('Could not access microphone:', error);
+      console.error('Microphone access failed:', error);
     }
   }
 
@@ -241,7 +247,6 @@ export class AudioEngine {
     }, 5000);
   }
 
-  // Compatibility wrapper – calls the new top‑level speak function
   speak(text, characterId) {
     speak(text, characterId);
   }
