@@ -130,7 +130,7 @@ export async function speak(text, characterId) {
 }
 
 // ---------------------------------------------------------------------------
-// AudioEngine with 3‑second silence timer, noise gate & fixed wave colour
+// AudioEngine with 3‑second silence timer (NO noise gate)
 // ---------------------------------------------------------------------------
 export class AudioEngine {
   constructor(state, onUserSpeech) {
@@ -145,7 +145,7 @@ export class AudioEngine {
     this.animationFrame = null;
     this.silenceTimeout = null;
     this.lastInterimTranscript = '';
-    this.SILENCE_DELAY = 3000;
+    this.SILENCE_DELAY = 3000;   // 3 seconds of silence before sending
   }
 
   async start() {
@@ -164,41 +164,27 @@ export class AudioEngine {
       if (SpeechRecognition) {
         this.recognition = new SpeechRecognition();
         this.recognition.continuous = true;
-        this.recognition.interimResults = true;
+        this.recognition.interimResults = true;   // capture partial speech
         this.recognition.lang = 'en-US';
 
         this.recognition.onresult = (event) => {
           clearTimeout(this.silenceTimeout);
           let interim = '', final = '';
+
           for (let i = event.resultIndex; i < event.results.length; i++) {
-            const t = event.results[i][0].transcript;
-            if (event.results[i].isFinal) final += t;
-            else interim += t;
+            const transcript = event.results[i][0].transcript;
+            if (event.results[i].isFinal) {
+              final += transcript;
+            } else {
+              interim += transcript;
+            }
           }
+
           if (final) this.lastInterimTranscript = final;
           if (interim) this.lastInterimTranscript = final + interim;
 
-          // Silence timer with noise gate
+          // Start silence timer – after 3s of no speech, send the transcript
           this.silenceTimeout = setTimeout(() => {
-            // ---- noise gate: measure current volume ----
-            const bufferLength = this.analyser.frequencyBinCount;
-            const dataArray = new Uint8Array(bufferLength);
-            this.analyser.getByteTimeDomainData(dataArray);
-
-            let sum = 0;
-            for (let i = 0; i < bufferLength; i++) {
-              const sample = dataArray[i] / 128.0 - 1.0;
-              sum += sample * sample;
-            }
-            const rms = Math.sqrt(sum / bufferLength);
-
-            // If the volume is too low, ignore the transcript (background noise only)
-            if (rms < 0.05) {
-              console.log('🔇 Noise gate: skipping low‑volume transcript');
-              this.lastInterimTranscript = '';
-              return;
-            }
-
             const transcript = this.lastInterimTranscript.trim();
             if (transcript && this.onUserSpeech) {
               console.log('🎤 final transcript (after silence):', transcript);
@@ -208,13 +194,22 @@ export class AudioEngine {
           }, this.SILENCE_DELAY);
         };
 
-        this.recognition.onerror = (e) => console.warn('Speech recog error:', e.error);
-        this.recognition.onend = () => { if (this.isRunning) this.recognition.start(); };
+        this.recognition.onerror = (event) => {
+          console.warn('Speech recognition error:', event.error);
+          clearTimeout(this.silenceTimeout);
+        };
+
+        this.recognition.onend = () => {
+          // Restart if still running (continuous mode often ends after a pause)
+          if (this.isRunning) this.recognition.start();
+        };
+
         this.recognition.start();
       }
+
       this.isRunning = true;
-    } catch (err) {
-      console.error('Mic access failed:', err);
+    } catch (error) {
+      console.error('Could not access microphone:', error);
     }
   }
 
@@ -222,7 +217,8 @@ export class AudioEngine {
     const canvas = document.getElementById('wave-canvas');
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
-    const width = canvas.width, height = canvas.height;
+    const width = canvas.width;
+    const height = canvas.height;
     const bufferLength = this.analyser.frequencyBinCount;
     const dataArray = new Uint8Array(bufferLength);
 
@@ -261,6 +257,7 @@ export class AudioEngine {
     }, 5000);
   }
 
+  // Compatibility wrapper – calls the new top‑level speak function
   speak(text, characterId) {
     speak(text, characterId);
   }
