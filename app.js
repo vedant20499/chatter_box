@@ -174,7 +174,7 @@ async function startMain() {
   lastSpeechTime = Date.now();
   proactiveInterval = setInterval(async () => {
     if (!audioEngine || !audioEngine.isRunning) return;
-    if (isBotSpeaking) return;               // don't interrupt bot
+    if (isBotSpeaking) return;
 
     const silenceDuration = (Date.now() - lastSpeechTime) / 1000;
     if (silenceDuration > 45) {
@@ -183,7 +183,6 @@ async function startMain() {
     }
   }, 5000);
 
-  // Reset silence timer when bot finishes speaking
   window.addEventListener('botFinishedSpeaking', () => {
     lastSpeechTime = Date.now();
   });
@@ -196,11 +195,11 @@ async function startMain() {
 }
 
 // ---------------------------------------------------------------------------
-// Speech handler – with real‑time data injection
+// Speech handler – with real‑time data injection (logged)
 // ---------------------------------------------------------------------------
 async function handleUserSpeech(transcript) {
   if (!llm || !audioEngine) return;
-  lastSpeechTime = Date.now();   // reset silence timer
+  lastSpeechTime = Date.now();
 
   if (transcript === '__MUSIC_DETECTED__') {
     audioEngine.speak("I hear music. What song is this?", state.character);
@@ -217,10 +216,13 @@ async function handleUserSpeech(transcript) {
     { role: 'user', content: transcript }
   ];
 
-  // Inject weather / news / location context
+  // Inject real‑time data and log what was injected
   const injection = await getContextualInjection(transcript);
   if (injection) {
+    console.log('📡 Injected system message:', injection);
     messages.splice(1, 0, { role: 'system', content: injection });
+  } else {
+    console.log('📡 No real‑time data injected for this query.');
   }
 
   const response = await sendLLMRequest(messages);
@@ -232,7 +234,6 @@ async function handleUserSpeech(transcript) {
   state.compactedContext.push({ role: 'user', content: transcript });
   state.compactedContext.push({ role: 'assistant', content: response });
 
-  // Delayed compaction
   setTimeout(async () => {
     if (!audioEngine || !audioEngine.isRunning) return;
     await maybeCompact();
@@ -245,7 +246,7 @@ async function handleUserSpeech(transcript) {
 }
 
 // ---------------------------------------------------------------------------
-// Context injection (weather, news, location awareness)
+// Context injection (weather, news, location awareness) – with logging
 // ---------------------------------------------------------------------------
 async function getContextualInjection(userText) {
   const parts = [];
@@ -253,15 +254,25 @@ async function getContextualInjection(userText) {
 
   // Weather
   const weatherInfo = await getWeatherInfo(userText);
-  if (weatherInfo) parts.push(`Current weather: ${weatherInfo}`);
-
-  // News
-  if (/news|headlines|what'?s\s+happening/i.test(lower)) {
-    const headlines = await getNewsHeadlines();
-    if (headlines) parts.push(`Latest headlines: ${headlines}`);
+  if (weatherInfo) {
+    console.log('🌤️ Weather data retrieved:', weatherInfo);
+    parts.push(`Current weather: ${weatherInfo}`);
+  } else {
+    console.log('🌤️ No weather data matched.');
   }
 
-  // Always append general location context (if not already about weather)
+  // News
+  if (/news|headlines|what'?s\s+happening|latest events|current events/i.test(lower)) {
+    const headlines = await getNewsHeadlines();
+    if (headlines) {
+      console.log('📰 News headlines retrieved:', headlines);
+      parts.push(`Latest headlines: ${headlines}`);
+    } else {
+      console.log('📰 Failed to fetch news headlines.');
+    }
+  }
+
+  // Location context (only if no weather data)
   if (!weatherInfo && state.location) {
     parts.push(`The user's approximate location is ${state.location.city}, ${state.location.country}.`);
   }
@@ -270,7 +281,7 @@ async function getContextualInjection(userText) {
 }
 
 // ---------------------------------------------------------------------------
-// Weather (Open‑Meteo, no key)
+// Weather (Open‑Meteo, no key) – with error logging
 // ---------------------------------------------------------------------------
 async function getWeatherInfo(userText) {
   const patterns = [
@@ -293,39 +304,58 @@ async function getWeatherInfo(userText) {
 
   try {
     const geoRes = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(location)}&count=1&language=en&format=json`);
+    if (!geoRes.ok) throw new Error(`Geocoding failed with status ${geoRes.status}`);
     const geoData = await geoRes.json();
-    if (!geoData.results?.length) return null;
+    if (!geoData.results?.length) {
+      console.warn(`🌤️ Geocoding returned no results for "${location}"`);
+      return null;
+    }
     const { latitude, longitude, country } = geoData.results[0];
 
     const weatherRes = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current_weather=true`);
+    if (!weatherRes.ok) throw new Error(`Weather API failed with status ${weatherRes.status}`);
     const weatherData = await weatherRes.json();
     const current = weatherData.current_weather;
-    if (!current) return null;
+    if (!current) throw new Error('No current weather data');
     return `${location} (${country}): ${current.temperature}°C, wind ${current.windspeed} km/h`;
   } catch (e) {
+    console.error('🌤️ Weather fetch error:', e.message);
     return null;
   }
 }
 
 // ---------------------------------------------------------------------------
-// News (NPR RSS → rss2json, free, no key)
+// News (RSS → rss2json, free, no key) – with fallback and logging
 // ---------------------------------------------------------------------------
 async function getNewsHeadlines() {
-  try {
-    const rssUrl = encodeURIComponent('https://feeds.npr.org/1004/rss.xml');
-    const res = await fetch(`https://api.rss2json.com/v1/api.json?rss_url=${rssUrl}`);
-    const data = await res.json();
-    if (data.items?.length) {
-      return data.items.slice(0, 5).map(item => item.title).join('; ');
+  // Try multiple RSS feeds in order
+  const rssFeeds = [
+    'https://feeds.npr.org/1004/rss.xml',       // NPR World News
+    'https://feeds.bbci.co.uk/news/world/rss.xml' // BBC World News
+  ];
+
+  for (const rssUrl of rssFeeds) {
+    try {
+      console.log(`📰 Trying news feed: ${rssUrl}`);
+      const encoded = encodeURIComponent(rssUrl);
+      const res = await fetch(`https://api.rss2json.com/v1/api.json?rss_url=${encoded}`);
+      if (!res.ok) throw new Error(`rss2json returned ${res.status}`);
+      const data = await res.json();
+      if (data.items?.length > 0) {
+        const headlines = data.items.slice(0, 5).map(item => item.title).join('; ');
+        return headlines;
+      } else {
+        console.warn(`📰 Feed ${rssUrl} returned no items.`);
+      }
+    } catch (e) {
+      console.error(`📰 News fetch failed for ${rssUrl}:`, e.message);
     }
-    return null;
-  } catch (e) {
-    return null;
   }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
-// Proactive chat (silence → topic)
+// Proactive chat (silence → topic) – also uses the same injection
 // ---------------------------------------------------------------------------
 async function proactiveChat() {
   const topics = [
