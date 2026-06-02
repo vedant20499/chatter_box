@@ -95,7 +95,10 @@ async function playAudioBuffer(float32Array, sampleRate) {
     await ctx.resume();
   }
 
-  const audioBuffer = ctx.createBuffer(1, float32Array.length, sampleRate);
+  // Ensure sampleRate is a finite float before invoking createBuffer
+  const safeSampleRate = sampleRate && Number.isFinite(sampleRate) ? sampleRate : 24000;
+
+  const audioBuffer = ctx.createBuffer(1, float32Array.length, safeSampleRate);
   audioBuffer.getChannelData(0).set(float32Array);
 
   const source = ctx.createBufferSource();
@@ -125,11 +128,6 @@ export function stopSpeaking() {
   setSpeaking(false);
 }
 
-function getKokoroVoice(characterId) {
-  const char = CHARACTERS[characterId];
-  return char?.kokoroVoice || null;
-}
-
 // Public speak function – Kokoro first, then Web Speech API
 export async function speak(text, characterId) {
   if (!text) return;
@@ -145,17 +143,16 @@ export async function speak(text, characterId) {
         const voiceName = getKokoroVoice(characterId);
         if (voiceName) {
           const result = await kokoroTTS.generate(text, { voice: voiceName });
-          await playAudioBuffer(result.audio, result.sample_rate);
+          
+          // Guard against variations in ONNX runner metadata properties
+          const targetSampleRate = result.sampling_rate || result.sample_rate || 24000;
+          
+          await playAudioBuffer(result.audio, targetSampleRate);
           return;
         }
       }
     } catch (err) {
       console.warn('🎤 Kokoro TTS failed, using browser TTS:', err.message);
-      console.log("Kokoro Output Debug:", {
-                  isAudioValid: !!result.audio,
-                  audioLength: result.audio ? result.audio.length : 'N/A',
-                  sampleRate: result.sampleRate,
-                  sampling_rate: result.sampling_rate});
     }
   }
 
@@ -175,6 +172,11 @@ export async function speak(text, characterId) {
   utterance.onerror = () => setSpeaking(false);
 
   speechSynthesis.speak(utterance);
+}
+
+function getKokoroVoice(characterId) {
+  const char = CHARACTERS[characterId];
+  return char?.kokoroVoice || null;
 }
 
 // ---------------------------------------------------------------------------
@@ -240,7 +242,10 @@ export class AudioEngine {
           }, this.SILENCE_DELAY);
         };
 
-        this.recognition.onerror = (e) => console.warn('Speech recog error:', e.error);
+        this.recognition.onerror = (e) => {
+          if (e.error !== 'no-speech') console.warn('Speech recog error:', e.error);
+        };
+
         this.recognition.onend = () => { if (this.isRunning) this.recognition.start(); };
         this.recognition.start();
       }
