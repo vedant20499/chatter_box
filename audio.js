@@ -72,14 +72,16 @@ let currentAudioContext = null;
 let currentSource = null;
 
 function isFiniteAudio(float32Array) {
+  if (!float32Array || float32Array.length === 0) return false;
   for (let i = 0; i < float32Array.length; i++) {
-    if (!isFinite(float32Array[i])) return false;
+    if (!Number.isFinite(float32Array[i])) return false;
   }
   return true;
 }
 
 async function playAudioBuffer(float32Array, sampleRate) {
   if (!isFiniteAudio(float32Array)) {
+    console.warn('⚠️ Kokoro produced non‑finite audio – discarding');
     throw new Error('Non‑finite audio data from Kokoro');
   }
 
@@ -88,7 +90,7 @@ async function playAudioBuffer(float32Array, sampleRate) {
   const ctx = new (window.AudioContext || window.webkitAudioContext)();
   currentAudioContext = ctx;
 
-  // 🔧 CRITICAL: resume if suspended (browsers block audio until user gesture)
+  // Resume if suspended
   if (ctx.state === 'suspended') {
     await ctx.resume();
   }
@@ -148,7 +150,7 @@ export async function speak(text, characterId) {
         }
       }
     } catch (err) {
-      console.warn('Kokoro TTS failed, using browser TTS:', err.message);
+      console.warn('🎤 Kokoro TTS failed, using browser TTS:', err.message);
     }
   }
 
@@ -211,7 +213,6 @@ export class AudioEngine {
         this.recognition.onresult = (event) => {
           clearTimeout(this.silenceTimeout);
 
-          // Ignore any speech while the bot is speaking
           if (isSpeaking) return;
 
           let interim = '', final = '';
@@ -258,14 +259,12 @@ export class AudioEngine {
       this.analyser.getByteTimeDomainData(dataArray);
       ctx.clearRect(0, 0, width, height);
 
-      // Faint circle border for visibility
       ctx.beginPath();
       ctx.arc(width/2, height/2, width/2 - 2, 0, Math.PI * 2);
       ctx.strokeStyle = 'rgba(0, 188, 212, 0.2)';
       ctx.lineWidth = 1;
       ctx.stroke();
 
-      // Waveform
       ctx.beginPath();
       ctx.lineWidth = 2;
       ctx.strokeStyle = '#00bcd4';
