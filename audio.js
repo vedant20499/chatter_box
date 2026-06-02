@@ -308,7 +308,6 @@ export class AudioEngine {
 
         this.recognition.onerror = (e) => console.warn('Speech recog error:', e.error);
         this.recognition.onend = () => {
-          // Restart recognition if the engine is still supposed to be running
           if (this.isRunning && !isSpeaking) {
             try { this.recognition.start(); } catch (e) {}
           }
