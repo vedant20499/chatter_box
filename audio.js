@@ -14,21 +14,6 @@ let currentAudioContext = null;
 let currentSource = null;
 let activeEngine = null;
 
-async function checkWebGPUSupport() {
-  if (!window.isSecureContext) {
-    console.warn("⚠️ Insecure context – WebGPU disabled.");
-    return false;
-  }
-  if (!navigator.gpu) {
-    console.log("ℹ️ WebGPU not exposed.");
-    return false;
-  }
-  try {
-    const adapter = await navigator.gpu.requestAdapter();
-    return !!adapter;
-  } catch (e) { return false; }
-}
-
 async function loadKokoro() {
   if (kokoroTTS) return kokoroTTS;
   if (kokoroLoadPromise) return kokoroLoadPromise;
@@ -40,23 +25,15 @@ async function loadKokoro() {
   kokoroLoadPromise = (async () => {
     try {
       const { KokoroTTS } = await import('kokoro-js');
-      const hasWebGPU = await checkWebGPUSupport();
       const modelId = 'onnx-community/Kokoro-82M-v1.0-ONNX';
 
-      if (hasWebGPU) {
-        try {
-          console.log('🔄 WebGPU Verified. Loading FP32...');
-          kokoroTTS = await KokoroTTS.from_pretrained(modelId, { dtype: 'fp32', device: 'webgpu' });
-          console.log('✅ Kokoro WebGPU ready');
-          return kokoroTTS;
-        } catch (gpuError) {
-          console.warn('WebGPU failed, falling back to WASM:', gpuError.message);
-        }
-      }
-
-      console.log('📦 Loading 8-bit quantized WASM...');
-      kokoroTTS = await KokoroTTS.from_pretrained(modelId, { dtype: 'q8', device: 'wasm' });
-      console.log('✅ Kokoro WASM ready');
+      // Force stable WASM pipeline – avoids WebGPU device hangs
+      console.log('📦 Loading 8-bit quantized WASM pipeline (~88MB) …');
+      kokoroTTS = await KokoroTTS.from_pretrained(modelId, {
+        dtype: 'q8',
+        device: 'wasm'
+      });
+      console.log('✅ Kokoro ready (WASM)');
       return kokoroTTS;
     } catch (err) {
       console.error('❌ Kokoro initialization failed:', err);
@@ -182,6 +159,7 @@ export async function speak(rawText, characterId) {
     }
   }
 
+  // Fallback: browser Web Speech API
   const utterance = new SpeechSynthesisUtterance(text);
   const voice = getVoiceForCharacter(characterId);
   if (voice) utterance.voice = voice;
