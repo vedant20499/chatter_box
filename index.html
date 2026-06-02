@@ -4,15 +4,20 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
   <title>Friend AI</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
   <script defer src="/_vercel/insights/script.js"></script>
 </head>
 <body class="light">
   <div id="app">
     <div id="avatar-container">
-      <canvas id="wave-canvas" width="200" height="200"></canvas>
+      <div id="bot-callout" class="callout hidden"></div>
+      <canvas id="wave-canvas" width="300" height="300"></canvas>
       <div id="face-circle">😊</div>
     </div>
+    <div id="user-callout" class="callout hidden"></div>
     <div id="user-panel">
       <img id="user-avatar" src="" alt="User" style="display:none;">
       <span id="user-name-display"></span>

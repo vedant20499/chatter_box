@@ -14,6 +14,7 @@ let speakingTimeout = null;
 let currentAudioContext = null;
 let currentSource = null;
 let activeEngine = null;
+let currentBotAnalyser = null;
 
 // Global flag that app.js can check
 export let isBotSpeaking = false;
@@ -126,10 +127,17 @@ async function playAudioBuffer(float32Array, sampleRate) {
   buffer.getChannelData(0).set(float32Array);
   const source = ctx.createBufferSource();
   source.buffer = buffer;
-  source.connect(ctx.destination);
+  
+  // Set up bot analyser
+  currentBotAnalyser = ctx.createAnalyser();
+  currentBotAnalyser.fftSize = 256;
+  source.connect(currentBotAnalyser);
+  currentBotAnalyser.connect(ctx.destination);
+
   source.onended = () => {
     setSpeaking(false);
     currentSource = null;
+    currentBotAnalyser = null;
     if (activeEngine && activeEngine.isRunning && activeEngine.recognition) {
       try { activeEngine.recognition.start(); } catch (e) {}
     }
@@ -149,6 +157,7 @@ export function stopSpeaking() {
       currentAudioContext.suspend();
     }
   } catch (e) {}
+  currentBotAnalyser = null;
   speechSynthesis.cancel();
   setSpeaking(false);
 }
@@ -295,11 +304,30 @@ export class AudioEngine {
           if (final) this.lastInterimTranscript = final;
           if (interim) this.lastInterimTranscript = final + interim;
 
+          // Hide bot callout as soon as user starts speaking
+          const botCallout = document.getElementById('bot-callout');
+          if (botCallout) {
+            botCallout.classList.remove('visible');
+            setTimeout(() => botCallout.classList.add('hidden'), 300);
+          }
+
+          // Show and update user callout at the bottom
+          const userCallout = document.getElementById('user-callout');
+          if (userCallout && this.lastInterimTranscript.trim()) {
+            userCallout.innerHTML = `<span class="hearing-indicator">🎤</span> "${this.lastInterimTranscript}"`;
+            userCallout.classList.remove('hidden');
+            // small delay to trigger CSS transition
+            setTimeout(() => userCallout.classList.add('visible'), 50);
+          }
+
           this.silenceTimeout = setTimeout(() => {
             if (isSpeaking) return;
             const transcript = this.lastInterimTranscript.trim();
             if (transcript && this.onUserSpeech) {
               console.log('🎤 final transcript (after silence):', transcript);
+              if (userCallout) {
+                userCallout.innerHTML = `<span class="hearing-indicator">⏳</span> Thinking...`;
+              }
               this.onUserSpeech(transcript);
               this.lastInterimTranscript = '';
             }
@@ -325,35 +353,70 @@ export class AudioEngine {
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     const width = canvas.width, height = canvas.height;
-    const bufferLength = this.analyser.frequencyBinCount;
+    const bufferLength = this.analyser ? this.analyser.frequencyBinCount : 128;
     const dataArray = new Uint8Array(bufferLength);
 
     const draw = () => {
       if (!this.isRunning) return;
       this.animationFrame = requestAnimationFrame(draw);
-      this.analyser.getByteTimeDomainData(dataArray);
+      
       ctx.clearRect(0, 0, width, height);
+      
+      // Default to silence (128)
+      dataArray.fill(128);
 
+      if (isBotSpeaking) {
+        if (currentBotAnalyser) {
+          currentBotAnalyser.getByteTimeDomainData(dataArray);
+        } else {
+          // Generate a synthetic voice-like wave pattern for browser TTS
+          const time = Date.now() * 0.015;
+          for (let i = 0; i < bufferLength; i++) {
+            const wave1 = Math.sin(i * 0.15 + time) * 18;
+            const wave2 = Math.cos(i * 0.08 + time * 1.3) * 12;
+            const noise = (Math.random() - 0.5) * 3;
+            dataArray[i] = 128 + wave1 + wave2 + noise;
+          }
+        }
+      } else if (this.analyser) {
+        this.analyser.getByteTimeDomainData(dataArray);
+      }
+
+      // Draw standard background ring
       ctx.beginPath();
-      ctx.arc(width / 2, height / 2, Math.max(1, width / 2 - 2), 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(0, 188, 212, 0.2)';
+      ctx.arc(width / 2, height / 2, 105, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(0, 188, 212, 0.08)';
       ctx.lineWidth = 1;
       ctx.stroke();
 
+      // Draw dynamic visualizer wave around face avatar
+      ctx.shadowBlur = 8;
+      ctx.shadowColor = '#00bcd4';
       ctx.beginPath();
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = '#00bcd4';
-      const sliceWidth = width / bufferLength;
-      let x = 0;
+      
+      const baseRadius = 105;
+      const maxAmplitude = 30;
+
       for (let i = 0; i < bufferLength; i++) {
-        const v = dataArray[i] / 128.0;
-        const y = (v * height) / 2;
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-        x += sliceWidth;
+        const angle = (i / bufferLength) * Math.PI * 2;
+        const offset = (dataArray[i] - 128) / 128.0;
+        const r = baseRadius + offset * maxAmplitude;
+        
+        const x = width / 2 + Math.cos(angle) * r;
+        const y = height / 2 + Math.sin(angle) * r;
+        
+        if (i === 0) {
+          ctx.moveTo(x, y);
+        } else {
+          ctx.lineTo(x, y);
+        }
       }
-      ctx.lineTo(width, height / 2);
+      
+      ctx.closePath();
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = '#00bcd4';
       ctx.stroke();
+      ctx.shadowBlur = 0;
     };
     draw();
   }

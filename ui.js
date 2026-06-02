@@ -48,6 +48,9 @@ export function setupSettingsUI(state, llmEngine, onSaveCallback) {
       llmEngine.setSystemPrompt(rawPrompt.replace('{{userName}}', state.name || 'my friend'));
     }
 
+    const face = document.getElementById('face-circle');
+    if (face) face.textContent = '😊';
+
     document.body.className = themeSelect.value;
     localStorage.setItem('theme', themeSelect.value);
     if (window.va) window.va('event', { name: 'settings_saved' });

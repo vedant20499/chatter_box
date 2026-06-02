@@ -30,6 +30,97 @@ let lastSpeechTime = 0;
 let proactiveInterval = null;
 
 // ---------------------------------------------------------------------------
+// Expression Parser & Emoji Mapping
+// ---------------------------------------------------------------------------
+const EXPRESSION_MAP = {
+  smile: '😊',
+  giggle: '😅',
+  laugh: '😄',
+  grin: '😁',
+  chuckle: '😆',
+  smirk: '😏',
+  wink: '😉',
+  gasp: '😮',
+  tease: '😜',
+  love: '🥰',
+  blush: '😊',
+  hug: '🤗',
+  heart: '😍',
+  think: '🤔',
+  ponder: '🧐',
+  hmm: '🤔',
+  confused: '😕',
+  sigh: '😔',
+  shrug: '🤷',
+  sad: '😢',
+  cry: '😭',
+  angry: '😠',
+  mad: '😡',
+  annoyed: '😒',
+  scared: '😱',
+  fear: '😨',
+  shocked: '😱',
+  tired: '🥱',
+  yawn: '🥱',
+  sleep: '😴',
+};
+
+function parseExpression(text) {
+  let emoji = '😊'; // Default smiley emoji for all bots
+  let cleanedText = text;
+
+  // 1. Look for enclosed action expressions (e.g. *smiles*, [laughs], (chuckles))
+  const actionRegex = /[\*\[\(]([^*\]\)]+)[\*\]\)]/g;
+  let match;
+  let matchedActions = [];
+  while ((match = actionRegex.exec(text)) !== null) {
+    matchedActions.push(match[1].toLowerCase().trim());
+  }
+
+  // If we found action expressions, map them to emojis
+  if (matchedActions.length > 0) {
+    const lastAction = matchedActions[matchedActions.length - 1];
+    for (const [key, val] of Object.entries(EXPRESSION_MAP)) {
+      if (lastAction.includes(key)) {
+        emoji = val;
+        break;
+      }
+    }
+  } else {
+    // 2. Look for emojis in the text itself
+    const emojiRegex = /[\u{1F300}-\u{1F9FF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F900}-\u{1F9FF}\u{1F1E6}-\u{1F1FF}]/gu;
+    const emojis = text.match(emojiRegex);
+    if (emojis && emojis.length > 0) {
+      emoji = emojis[0];
+    } else {
+      // 3. Fallback: check general keywords in the text
+      const lowerText = text.toLowerCase();
+      for (const [key, val] of Object.entries(EXPRESSION_MAP)) {
+        if (lowerText.includes(key)) {
+          emoji = val;
+          break;
+        }
+      }
+    }
+  }
+
+  // Clean the text by removing all enclosed action expressions
+  cleanedText = text
+    .replace(/[\*\[\(][^*\]\)]+[\*\]\)]/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+
+  return { emoji, cleanedText };
+}
+
+function cleanQueryForSearch(text) {
+  return text
+    .replace(/^(?:what(?:'s|s|is)?|tell\s+me\s+about|show\s+me|find|search\s+for|do\s+you\s+know\s+about|any\s+news\s+on|situation\s+of|latest\s+on)\s+/i, '')
+    .replace(/\?+$/, '')
+    .trim();
+}
+
+// ---------------------------------------------------------------------------
 // Location detection (asks browser permission)
 // ---------------------------------------------------------------------------
 async function detectLocation() {
@@ -167,6 +258,10 @@ async function startMain() {
   const rawPrompt = CHARACTERS[state.character].prompt;
   llm.setSystemPrompt(rawPrompt.replace('{{userName}}', state.name || 'my friend'));
 
+  // Ensure default smiley emoji is set initially
+  const face = document.getElementById('face-circle');
+  if (face) face.textContent = '😊';
+
   audioEngine = new AudioEngine(state, handleUserSpeech);
   await audioEngine.start();
 
@@ -185,6 +280,9 @@ async function startMain() {
 
   window.addEventListener('botFinishedSpeaking', () => {
     lastSpeechTime = Date.now();
+    // Reset face back to default smiley after bot finishes speaking
+    const face = document.getElementById('face-circle');
+    if (face) face.textContent = '😊';
   });
 
   window.addEventListener('beforeunload', () => {
@@ -204,6 +302,13 @@ async function handleUserSpeech(transcript) {
   if (transcript === '__MUSIC_DETECTED__') {
     audioEngine.speak("I hear music. What song is this?", state.character);
     return;
+  }
+
+  // Clear and hide user callout when response generation begins
+  const userCallout = document.getElementById('user-callout');
+  if (userCallout) {
+    userCallout.classList.remove('visible');
+    setTimeout(() => userCallout.classList.add('hidden'), 300);
   }
 
   state.messageCount++;
@@ -229,7 +334,20 @@ async function handleUserSpeech(transcript) {
   if (!response) return;
 
   console.log('🤖 Bot:', response);
-  audioEngine.speak(response, state.character);
+
+  // Parse expression to change emoji, clean the text and display it in bot callout
+  const parsed = parseExpression(response);
+  const face = document.getElementById('face-circle');
+  if (face) face.textContent = parsed.emoji;
+
+  const botCallout = document.getElementById('bot-callout');
+  if (botCallout) {
+    botCallout.textContent = parsed.cleanedText;
+    botCallout.classList.remove('hidden');
+    setTimeout(() => botCallout.classList.add('visible'), 50);
+  }
+
+  audioEngine.speak(parsed.cleanedText, state.character);
 
   state.compactedContext.push({ role: 'user', content: transcript });
   state.compactedContext.push({ role: 'assistant', content: response });
@@ -261,12 +379,13 @@ async function getContextualInjection(userText) {
     console.log('🌤️ No weather data matched.');
   }
 
-  // News
-  if (/news|headlines|what'?s\s+happening|latest events|current events/i.test(lower)) {
-    const headlines = await getNewsHeadlines();
+  // News (support search topics or general news/current situation)
+  const isNewsQuery = /news|headlines|what'?s\s+(?:happening|going\s+on)|latest\s+(?:events|updates)|current\s+(?:events|situation|status)/i.test(lower);
+  if (isNewsQuery) {
+    const headlines = await getNewsHeadlines(userText);
     if (headlines) {
       console.log('📰 News headlines retrieved:', headlines);
-      parts.push(`Latest headlines: ${headlines}`);
+      parts.push(`Latest news updates: ${headlines}`);
     } else {
       console.log('📰 Failed to fetch news headlines.');
     }
@@ -334,37 +453,32 @@ async function getWeatherInfo(userText) {
 }
 
 // ---------------------------------------------------------------------------
-// News (RSS → rss2json, free, no key) – with fallback and logging
+// News (Google News Search RSS → rss2json, free, no key)
 // ---------------------------------------------------------------------------
-async function getNewsHeadlines() {
-  const rssFeeds = [
-    'https://feeds.npr.org/1004/rss.xml',
-    'https://feeds.bbci.co.uk/news/world/rss.xml'
-  ];
+async function getNewsHeadlines(query = "") {
+  let searchWord = query ? cleanQueryForSearch(query) : "";
+  if (!searchWord || searchWord.toLowerCase() === 'news' || searchWord.toLowerCase() === 'headlines') {
+    searchWord = "world news";
+  }
 
-  for (const rssUrl of rssFeeds) {
-    try {
-      console.log(`📰 Trying news feed: ${rssUrl}`);
-      const encoded = encodeURIComponent(rssUrl);
-      const res = await fetch(`https://api.rss2json.com/v1/api.json?rss_url=${encoded}`);
-      if (!res.ok) {
-        console.warn(`📰 rss2json returned ${res.status} for ${rssUrl}`);
-        continue;
-      }
-      const data = await res.json();
-      if (data.items?.length > 0) {
-        return data.items.slice(0, 5).map(item => item.title).join('; ');
-      } else {
-        console.warn(`📰 Feed ${rssUrl} returned no items.`);
-      }
-    } catch (e) {
-      console.error(`📰 News fetch failed for ${rssUrl}:`, e.message);
-      // Show a visible alert once
-      if (!window._newsErrorShown) {
-        alert('News fetch is currently failing. Please check the console for details.');
-        window._newsErrorShown = true;
-      }
+  console.log(`🔍 Searching Google News RSS for: "${searchWord}"`);
+  const rssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(searchWord)}&hl=en-US&gl=US&ceid=US:en`;
+
+  try {
+    const encoded = encodeURIComponent(rssUrl);
+    const res = await fetch(`https://api.rss2json.com/v1/api.json?rss_url=${encoded}`);
+    if (!res.ok) {
+      console.warn(`📰 rss2json returned ${res.status} for ${searchWord}`);
+      return null;
     }
+    const data = await res.json();
+    if (data.items?.length > 0) {
+      return data.items.slice(0, 5).map(item => item.title).join('; ');
+    } else {
+      console.warn(`📰 Google News RSS returned no items for: ${searchWord}`);
+    }
+  } catch (e) {
+    console.error(`📰 News fetch failed for ${searchWord}:`, e.message);
   }
   return null;
 }
@@ -399,7 +513,19 @@ async function proactiveChat() {
     { role: 'user', content: prompt }
   ]);
   if (response) {
-    audioEngine.speak(response, state.character);
+    // Parse expression for proactive response
+    const parsed = parseExpression(response);
+    const face = document.getElementById('face-circle');
+    if (face) face.textContent = parsed.emoji;
+
+    const botCallout = document.getElementById('bot-callout');
+    if (botCallout) {
+      botCallout.textContent = parsed.cleanedText;
+      botCallout.classList.remove('hidden');
+      setTimeout(() => botCallout.classList.add('visible'), 50);
+    }
+
+    audioEngine.speak(parsed.cleanedText, state.character);
     state.compactedContext.push({ role: 'assistant', content: response });
     console.log('🤖 Proactive:', response);
   }

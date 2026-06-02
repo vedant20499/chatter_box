@@ -1,17 +1,26 @@
 :root {
-  --bg: #ffffff;
-  --text: #222222;
-  --modal-bg: rgba(0, 0, 0, 0.5);
-  --modal-content: #ffffff;
-  --button-bg: #0070f3;
+  --bg: radial-gradient(circle at top right, #fcfcfd, #f4f5f8);
+  --text: #1d1d1f;
+  --modal-bg: rgba(29, 29, 31, 0.4);
+  --modal-content: rgba(255, 255, 255, 0.85);
+  --modal-border: rgba(255, 255, 255, 0.5);
+  --button-bg: #0071e3;
   --button-text: #ffffff;
+  --accent: #00bcd4;
+  --accent-glow: rgba(0, 188, 212, 0.25);
+  --panel-bg: rgba(255, 255, 255, 0.7);
+  --font-title: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-body: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
 }
 
 .dark {
-  --bg: #1a1a1a;
-  --text: #eeeeee;
-  --modal-content: #2a2a2a;
-  --button-bg: #555555;
+  --bg: radial-gradient(circle at bottom left, #0e0e11, #181822);
+  --text: #f5f5f7;
+  --modal-content: rgba(28, 28, 35, 0.85);
+  --modal-border: rgba(255, 255, 255, 0.08);
+  --button-bg: #0071e3;
+  --panel-bg: rgba(28, 28, 35, 0.65);
+  --accent-glow: rgba(0, 188, 212, 0.4);
 }
 
 * {
@@ -21,7 +30,7 @@
 }
 
 body {
-  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  font-family: var(--font-body);
   background: var(--bg);
   color: var(--text);
   display: flex;
@@ -29,78 +38,206 @@ body {
   align-items: center;
   height: 100vh;
   overflow: hidden;
-  transition: background 0.3s, color 0.3s;
+  transition: background 0.5s ease, color 0.3s ease;
 }
 
 #app {
   position: relative;
   width: 100%;
   height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
 }
 
 #avatar-container {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  text-align: center;
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 200px;
+  height: 200px;
 }
 
 #wave-canvas {
   position: absolute;
   top: -50px;
   left: -50px;
+  width: 300px;
+  height: 300px;
   border-radius: 50%;
-  opacity: 0.8;
+  opacity: 0.95;
+  pointer-events: none;
+  z-index: 1;
 }
 
 #face-circle {
-  font-size: 60px;
+  font-size: 80px;
   line-height: 200px;
   width: 200px;
   height: 200px;
   position: relative;
   z-index: 2;
-  cursor: default;
+  cursor: pointer;
+  background: var(--panel-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--modal-border);
+  border-radius: 50%;
+  text-align: center;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.05), 
+              0 0 40px var(--accent-glow);
+  transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275), box-shadow 0.3s ease;
+}
+
+#face-circle:hover {
+  transform: scale(1.05);
+  box-shadow: 0 25px 50px rgba(0, 0, 0, 0.08), 
+              0 0 60px var(--accent-glow);
+}
+
+#face-circle:active {
+  transform: scale(0.95);
 }
 
 #user-panel {
   position: absolute;
-  top: 10px;
-  right: 10px;
+  top: 20px;
+  right: 20px;
   display: flex;
   align-items: center;
-  gap: 8px;
-  background: var(--modal-content);
-  padding: 5px 10px;
-  border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-}
-
-#user-avatar {
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-  object-fit: cover;
+  gap: 12px;
+  background: var(--panel-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--modal-border);
+  padding: 8px 16px;
+  border-radius: 30px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.04);
+  z-index: 10;
 }
 
 #user-name-display {
-  font-weight: bold;
+  font-family: var(--font-title);
+  font-weight: 600;
+  font-size: 15px;
+  letter-spacing: -0.2px;
 }
 
 #settings-btn, #btn-instagram, #btn-spotify {
-  background: none;
-  border: 1px solid var(--text);
+  background: rgba(0, 0, 0, 0.03);
+  border: 1px solid rgba(0, 0, 0, 0.08);
   color: var(--text);
-  border-radius: 6px;
-  padding: 4px 8px;
+  border-radius: 20px;
+  padding: 6px 14px;
   cursor: pointer;
-  font-size: 14px;
+  font-family: var(--font-body);
+  font-weight: 500;
+  font-size: 13px;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dark #settings-btn, .dark #btn-instagram, .dark #btn-spotify {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 #settings-btn:hover, #btn-instagram:hover, #btn-spotify:hover {
   background: var(--button-bg);
-  color: var(--button-text);
+  border-color: var(--button-bg);
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+
+/* --- Callout Bubbles --- */
+
+.callout {
+  position: absolute;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.08);
+  color: var(--text);
+  padding: 14px 22px;
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 1.5;
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 100;
+}
+
+/* Bot Callout: Top-centered above avatar */
+#bot-callout {
+  bottom: 240px;
+  left: 50%;
+  transform: translateX(-50%) translateY(10px) scale(0.95);
+  background: var(--panel-bg);
+  border: 1px solid var(--modal-border);
+  border-radius: 24px;
+  max-width: 360px;
+  width: max-content;
+  min-width: 160px;
+  text-align: center;
+}
+
+#bot-callout.visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0) scale(1);
+  pointer-events: auto;
+}
+
+#bot-callout::after {
+  content: '';
+  position: absolute;
+  bottom: -8px;
+  left: 50%;
+  transform: translateX(-50%);
+  border-width: 8px 8px 0;
+  border-style: solid;
+  border-color: var(--modal-border) transparent;
+  display: block;
+  width: 0;
+}
+
+/* User Callout: Bottom-right aligned */
+#user-callout {
+  bottom: 30px;
+  right: 30px;
+  transform: translateY(10px) scale(0.95);
+  background: rgba(0, 113, 227, 0.08);
+  border: 1px solid rgba(0, 113, 227, 0.2);
+  border-radius: 20px 20px 2px 20px;
+  max-width: 320px;
+  width: max-content;
+  min-width: 100px;
+  text-align: left;
+}
+
+.dark #user-callout {
+  background: rgba(0, 113, 227, 0.15);
+  border: 1px solid rgba(0, 113, 227, 0.3);
+}
+
+#user-callout.visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
+}
+
+.hearing-indicator {
+  display: inline-block;
+  animation: pulse 1.5s infinite ease-in-out;
+  margin-right: 4px;
+}
+
+@keyframes pulse {
+  0% { transform: scale(1); opacity: 0.6; }
+  50% { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(1); opacity: 0.6; }
 }
 
 /* Modals */
@@ -115,58 +252,128 @@ body {
   width: 100%;
   height: 100%;
   background: var(--modal-bg);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   display: flex;
   justify-content: center;
   align-items: center;
-  z-index: 100;
+  z-index: 1000;
+  opacity: 0;
+  animation: fadeIn 0.3s forwards ease-out;
 }
 
 .modal-content {
   background: var(--modal-content);
-  padding: 20px;
-  border-radius: 12px;
-  width: 340px;
+  border: 1px solid var(--modal-border);
+  padding: 28px;
+  border-radius: 28px;
+  width: 380px;
   max-width: 90%;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+  box-shadow: 0 30px 60px rgba(0, 0, 0, 0.12);
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 16px;
+  transform: scale(0.95);
+  animation: scaleIn 0.3s forwards cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .modal-content h2 {
-  margin-bottom: 10px;
+  font-family: var(--font-title);
+  font-weight: 700;
+  font-size: 24px;
+  letter-spacing: -0.5px;
+}
+
+.modal-content p {
+  font-size: 14px;
+  color: var(--text);
+  opacity: 0.7;
+  line-height: 1.5;
 }
 
 .modal-content label {
+  font-family: var(--font-title);
   font-weight: 600;
-  margin-top: 10px;
+  font-size: 14px;
+  margin-top: 6px;
 }
 
 .modal-content input[type="text"],
 .modal-content input[type="password"],
 .modal-content select {
-  padding: 8px;
-  border-radius: 6px;
-  border: 1px solid #ccc;
+  padding: 12px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  background: rgba(0, 0, 0, 0.02);
+  color: var(--text);
+  font-family: var(--font-body);
   font-size: 14px;
   width: 100%;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.dark .modal-content input[type="text"],
+.dark .modal-content input[type="password"],
+.dark .modal-content select {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.modal-content input:focus,
+.modal-content select:focus {
+  border-color: var(--button-bg);
+  background: var(--bg);
+  box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.15);
 }
 
 .modal-content button {
-  padding: 10px;
+  padding: 12px;
   border: none;
   background: var(--button-bg);
-  color: var(--button-text);
-  border-radius: 6px;
+  color: #ffffff;
+  border-radius: 12px;
   cursor: pointer;
+  font-family: var(--font-body);
+  font-weight: 600;
   font-size: 14px;
-  margin-top: 5px;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 12px rgba(0, 113, 227, 0.2);
 }
 
 .modal-content button:hover {
-  opacity: 0.9;
+  opacity: 0.95;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(0, 113, 227, 0.3);
+}
+
+.modal-content button:active {
+  transform: translateY(0);
 }
 
 #btn-close-settings {
-  background: #888;
+  background: rgba(0, 0, 0, 0.05);
+  color: var(--text);
+  box-shadow: none;
+}
+
+.dark #btn-close-settings {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+#btn-close-settings:hover {
+  background: rgba(0, 0, 0, 0.08);
+  box-shadow: none;
+}
+
+.dark #btn-close-settings:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+@keyframes fadeIn {
+  to { opacity: 1; }
+}
+
+@keyframes scaleIn {
+  to { transform: scale(1); }
 }
