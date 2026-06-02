@@ -78,15 +78,24 @@ function isFiniteAudio(float32Array) {
   return true;
 }
 
-function playAudioBuffer(float32Array, sampleRate) {
+async function playAudioBuffer(float32Array, sampleRate) {
   if (!isFiniteAudio(float32Array)) {
     throw new Error('Non‑finite audio data from Kokoro');
   }
+
   stopSpeaking();
+
   const ctx = new (window.AudioContext || window.webkitAudioContext)();
   currentAudioContext = ctx;
+
+  // 🔧 CRITICAL: resume if suspended (browsers block audio until user gesture)
+  if (ctx.state === 'suspended') {
+    await ctx.resume();
+  }
+
   const audioBuffer = ctx.createBuffer(1, float32Array.length, sampleRate);
   audioBuffer.getChannelData(0).set(float32Array);
+
   const source = ctx.createBufferSource();
   source.buffer = audioBuffer;
   source.connect(ctx.destination);
@@ -95,9 +104,11 @@ function playAudioBuffer(float32Array, sampleRate) {
     setSpeaking(false);
     currentSource = null;
   };
+
   setSpeaking(true);
   source.start(0);
   currentSource = source;
+  console.log('🔊 Audio playing (Kokoro)');
 }
 
 export function stopSpeaking() {
@@ -121,6 +132,8 @@ function getKokoroVoice(characterId) {
 export async function speak(text, characterId) {
   if (!text) return;
 
+  console.log('🔈 speak() called with:', text.slice(0, 50));
+
   setSpeaking(true);
 
   if (kokoroAvailable) {
@@ -130,7 +143,7 @@ export async function speak(text, characterId) {
         const voiceName = getKokoroVoice(characterId);
         if (voiceName) {
           const result = await kokoroTTS.generate(text, { voice: voiceName });
-          playAudioBuffer(result.audio, result.sample_rate);
+          await playAudioBuffer(result.audio, result.sample_rate);
           return;
         }
       }
@@ -245,14 +258,14 @@ export class AudioEngine {
       this.analyser.getByteTimeDomainData(dataArray);
       ctx.clearRect(0, 0, width, height);
 
-      // Draw a faint circle border so the wave area is always visible
+      // Faint circle border for visibility
       ctx.beginPath();
       ctx.arc(width/2, height/2, width/2 - 2, 0, Math.PI * 2);
       ctx.strokeStyle = 'rgba(0, 188, 212, 0.2)';
       ctx.lineWidth = 1;
       ctx.stroke();
 
-      // Draw the waveform
+      // Waveform
       ctx.beginPath();
       ctx.lineWidth = 2;
       ctx.strokeStyle = '#00bcd4';
