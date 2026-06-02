@@ -151,6 +151,11 @@ export async function speak(text, characterId) {
       }
     } catch (err) {
       console.warn('🎤 Kokoro TTS failed, using browser TTS:', err.message);
+      console.log("Kokoro Output Debug:", {
+                  isAudioValid: !!result.audio,
+                  audioLength: result.audio ? result.audio.length : 'N/A',
+                  sampleRate: result.sampleRate,
+                  sampling_rate: result.sampling_rate});
     }
   }
 
