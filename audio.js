@@ -21,7 +21,7 @@ async function loadKokoro() {
     try {
       const { KokoroTTS } = await import('kokoro-js');
       
-      // FIX: Try ultra-fast WebGPU first, fallback to WASM if unsupported
+      // Try ultra-fast WebGPU acceleration tier first
       try {
         console.log('🔄 Loading Kokoro TTS model via WebGPU (~80MB) …');
         kokoroTTS = await KokoroTTS.from_pretrained(
@@ -40,7 +40,7 @@ async function loadKokoro() {
       
       return kokoroTTS;
     } catch (err) {
-      console.error('❌ Kokoro failed entirely:', err);
+      console.error('❌ Kokoro failed:', err);
       kokoroAvailable = false;
       kokoroTTS = null;
       throw err;
@@ -99,7 +99,7 @@ async function playAudioBuffer(float32Array, sampleRate) {
 
   stopSpeaking();
 
-  // FIX: Reuse the global AudioContext instead of spawning a new instance every time
+  // Reuse hot AudioContext to eliminate generation lag between sentences
   if (!currentAudioContext || currentAudioContext.state === 'closed') {
     currentAudioContext = new (window.AudioContext || window.webkitAudioContext)();
   }
@@ -132,13 +132,18 @@ async function playAudioBuffer(float32Array, sampleRate) {
 export function stopSpeaking() {
   try {
     if (currentSource) { currentSource.stop(); currentSource = null; }
-    // FIX: Do not close context here to allow instantaneous reuse next cycle
+    // Suspend instead of killing context to allow instantaneous initialization next cycle
     if (currentAudioContext && currentAudioContext.state === 'running') {
       currentAudioContext.suspend();
     }
   } catch (e) { /* ignore */ }
   speechSynthesis.cancel();
   setSpeaking(false);
+}
+
+function getKokoroVoice(characterId) {
+  const char = CHARACTERS[characterId];
+  return char?.kokoroVoice || null;
 }
 
 // Public speak function – Kokoro first, then Web Speech API
@@ -156,8 +161,16 @@ export async function speak(text, characterId) {
         const voiceName = getKokoroVoice(characterId);
         if (voiceName) {
           const result = await kokoroTTS.generate(text, { voice: voiceName });
-          const targetSampleRate = result.sampling_rate || result.sample_rate || 24000;
           
+          // Debug telemetry block executed safely inside execution scope
+          console.log("Kokoro Output Debug:", {
+            isAudioValid: !!result.audio,
+            audioLength: result.audio ? result.audio.length : 'N/A',
+            sampleRate: result.sampleRate,
+            sampling_rate: result.sampling_rate
+          });
+
+          const targetSampleRate = result.sampling_rate || result.sample_rate || 24000;
           await playAudioBuffer(result.audio, targetSampleRate);
           return;
         }
@@ -183,11 +196,6 @@ export async function speak(text, characterId) {
   utterance.onerror = () => setSpeaking(false);
 
   speechSynthesis.speak(utterance);
-}
-
-function getKokoroVoice(characterId) {
-  const char = CHARACTERS[characterId];
-  return char?.kokoroVoice || null;
 }
 
 // ---------------------------------------------------------------------------
@@ -221,7 +229,7 @@ export class AudioEngine {
       this.drawWaves();
       this.soundClassifyLoop();
 
-      // FIX: Warm up and load the Kokoro model in the background immediately on startup
+      // Warm up and pre-load model into local background cache immediately at runtime startup
       loadKokoro().catch((e) => console.warn('Background Kokoro pre-load failed:', e.message));
 
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -315,27 +323,26 @@ export class AudioEngine {
 
   soundClassifyLoop() {
     setInterval(() => {
-      // FIX: Guard checks. If stopped, or if AI is currently talking, exit immediately.
+      // Loop Guard: exit immediately if context is halted or if the AI itself is speaking
       if (!this.isRunning || isSpeaking) return;
 
       const bufferLength = this.analyser.frequencyBinCount;
       const dataArray = new Uint8Array(bufferLength);
       this.analyser.getByteFrequencyData(dataArray);
 
-      // Analyze ambient sound amplitude
       let frequencyVolumeSum = 0;
       for (let i = 0; i < bufferLength; i++) {
         frequencyVolumeSum += dataArray[i];
       }
       const averageVolume = frequencyVolumeSum / bufferLength;
 
-      // FIX: Only trigger music events if there's real acoustic energy in the room (Threshold > 35)
+      // Filter disturbances by requiring persistent environmental energy (Threshold > 35) before random firing
       if (averageVolume > 35 && Math.random() < 0.15 && !this.musicCooldown) {
         if (this.onUserSpeech) this.onUserSpeech('__MUSIC_DETECTED__');
         this.musicCooldown = true;
         setTimeout(() => { this.musicCooldown = false; }, 30000);
       }
-    }, 4000);
+    }, 5000);
   }
 
   speak(text, characterId) {
