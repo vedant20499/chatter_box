@@ -1,5 +1,5 @@
 // ui.js
-import { downloadMarkdown, FriendState } from './state.js';
+import { downloadMarkdown } from './state.js';
 import { CHARACTERS } from './characters.js';
 
 // ---------- Modal helpers ----------
@@ -14,7 +14,7 @@ export function hideModal(id) {
 export function updateUserDisplay(state) {
   const avatar = document.getElementById('user-avatar');
   const nameSpan = document.getElementById('user-name-display');
-  if (avatar) avatar.style.display = 'none';   // permanently hidden
+  if (avatar) avatar.style.display = 'none';
   if (state.name) {
     nameSpan.textContent = state.name;
   } else {
@@ -22,7 +22,7 @@ export function updateUserDisplay(state) {
   }
 }
 
-// ---------- Settings modal ----------
+// ---------- Settings modal (name injection, theme, API keys) ----------
 export function setupSettingsUI(state, llmEngine, onSaveCallback) {
   const charSelect = document.getElementById('character-select');
   const groqInput = document.getElementById('groq-key');
@@ -42,13 +42,14 @@ export function setupSettingsUI(state, llmEngine, onSaveCallback) {
     state.llmKeys.cerebras = cerebrasInput.value.trim();
     state.llmKeys.openrouter = openrouterInput.value.trim();
 
+    // Update system prompt with user's name
     if (llmEngine) {
-      llmEngine.setSystemPrompt(CHARACTERS[state.character].prompt);
+      const rawPrompt = CHARACTERS[state.character].prompt;
+      llmEngine.setSystemPrompt(rawPrompt.replace('{{userName}}', state.name || 'my friend'));
     }
 
     document.body.className = themeSelect.value;
     localStorage.setItem('theme', themeSelect.value);
-
     if (window.va) window.va('event', { name: 'settings_saved' });
     hideModal('modal-settings');
     if (onSaveCallback) onSaveCallback();
@@ -68,9 +69,7 @@ export function setupSettingsUI(state, llmEngine, onSaveCallback) {
   });
 }
 
-// ---------------------------------------------------------------------------
-// PKCE helpers (used by Instagram & Spotify)
-// ---------------------------------------------------------------------------
+// ---------- PKCE helpers ----------
 function base64URLEncode(buffer) {
   return btoa(String.fromCharCode(...new Uint8Array(buffer)))
     .replace(/\+/g, '-')
@@ -91,9 +90,7 @@ async function generateCodeChallenge(verifier) {
   return base64URLEncode(hash);
 }
 
-// ---------------------------------------------------------------------------
-// Instagram Basic Display (no review required)
-// ---------------------------------------------------------------------------
+// ---------- Instagram Basic Display (no review required) ----------
 const INSTAGRAM_CLIENT_ID = 'YOUR_INSTAGRAM_CLIENT_ID';   // <-- Replace with your ID
 
 export function setupInstagramConnect(state, onTokenSaved) {
@@ -156,9 +153,7 @@ export async function handleInstagramCallback(state) {
   return false;
 }
 
-// ---------------------------------------------------------------------------
-// Spotify PKCE
-// ---------------------------------------------------------------------------
+// ---------- Spotify PKCE ----------
 const SPOTIFY_CLIENT_ID = 'YOUR_SPOTIFY_CLIENT_ID';   // <-- Replace with your ID
 
 export function setupSpotifyConnect(state, onTokenSaved) {
