@@ -8,11 +8,21 @@ let kokoroTTS = null;
 let kokoroLoadPromise = null;
 let isLoading = false;
 let kokoroAvailable = true;
+let useWebGPU = true;               // <-- allow WebGPU, disable after first GPU crash
 let isSpeaking = false;
 let speakingTimeout = null;
 let currentAudioContext = null;
 let currentSource = null;
 let activeEngine = null;
+
+async function checkWebGPUSupport() {
+  if (!window.isSecureContext) return false;
+  if (!navigator.gpu) return false;
+  try {
+    const adapter = await navigator.gpu.requestAdapter();
+    return !!adapter;
+  } catch (e) { return false; }
+}
 
 async function loadKokoro() {
   if (kokoroTTS) return kokoroTTS;
@@ -27,8 +37,23 @@ async function loadKokoro() {
       const { KokoroTTS } = await import('kokoro-js');
       const modelId = 'onnx-community/Kokoro-82M-v1.0-ONNX';
 
-      // Force stable WASM pipeline – avoids WebGPU device hangs
-      console.log('📦 Loading 8-bit quantized WASM pipeline (~88MB) …');
+      if (useWebGPU && await checkWebGPUSupport()) {
+        try {
+          console.log('🔄 Attempting WebGPU pipeline...');
+          kokoroTTS = await KokoroTTS.from_pretrained(modelId, {
+            dtype: 'fp32',
+            device: 'webgpu'
+          });
+          console.log('✅ Kokoro WebGPU ready');
+          return kokoroTTS;
+        } catch (gpuError) {
+          console.warn('⚠️ WebGPU failed, falling back to WASM:', gpuError.message);
+          useWebGPU = false;   // permanently switch to WASM
+        }
+      }
+
+      // WASM fallback (always safe)
+      console.log('📦 Loading 8‑bit quantized WASM pipeline (~88MB) …');
       kokoroTTS = await KokoroTTS.from_pretrained(modelId, {
         dtype: 'q8',
         device: 'wasm'
@@ -138,6 +163,7 @@ export async function speak(rawText, characterId) {
   console.log('🔈 speak:', text.slice(0, 50));
   setSpeaking(true);
 
+  // Mute mic during playback
   if (activeEngine && activeEngine.recognition) {
     try { activeEngine.recognition.stop(); } catch (e) {}
   }
@@ -148,18 +174,37 @@ export async function speak(rawText, characterId) {
       if (kokoroTTS) {
         const voiceName = getKokoroVoice(characterId);
         if (voiceName) {
-          const result = await kokoroTTS.generate(text, { voice: voiceName });
+          let result;
+          try {
+            result = await kokoroTTS.generate(text, { voice: voiceName });
+          } catch (genError) {
+            // If generation fails (e.g., WebGPU device lost), force reload with WASM
+            if (useWebGPU && genError.message?.includes('Device')) {
+              console.warn('🛑 WebGPU device lost during generation, falling back to WASM');
+              useWebGPU = false;
+              kokoroTTS = null;                // force reload
+              await loadKokoro();              // reload with WASM
+              if (kokoroTTS) {
+                result = await kokoroTTS.generate(text, { voice: voiceName });
+              } else {
+                throw genError;
+              }
+            } else {
+              throw genError;
+            }
+          }
+
           const targetRate = result.sampling_rate || result.sample_rate || 24000;
           await playAudioBuffer(result.audio, targetRate);
           return;
         }
       }
     } catch (err) {
-      console.warn('Kokoro failed, falling back to browser TTS:', err.message);
+      console.warn('Kokoro failed, using browser TTS:', err.message);
     }
   }
 
-  // Fallback: browser Web Speech API
+  // Browser TTS fallback
   const utterance = new SpeechSynthesisUtterance(text);
   const voice = getVoiceForCharacter(characterId);
   if (voice) utterance.voice = voice;
@@ -185,7 +230,7 @@ export async function speak(rawText, characterId) {
 }
 
 // ---------------------------------------------------------------------------
-// AudioEngine with 3‑second silence timer, mute/unmute, and self‑reply guard
+// AudioEngine (unchanged)
 // ---------------------------------------------------------------------------
 export class AudioEngine {
   constructor(state, onUserSpeech) {
