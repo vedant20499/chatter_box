@@ -8,12 +8,15 @@ let kokoroTTS = null;
 let kokoroLoadPromise = null;
 let isLoading = false;
 let kokoroAvailable = true;
-let useWebGPU = true;               // <-- Allow WebGPU, fallback permanently to WASM on failure
-let isSpeaking = false;
+let useWebGPU = true;               // allow WebGPU, disable after first GPU crash
+let isSpeaking = false;             // true while bot is speaking
 let speakingTimeout = null;
 let currentAudioContext = null;
 let currentSource = null;
 let activeEngine = null;
+
+// Global flag that app.js can check
+export let isBotSpeaking = false;
 
 async function checkWebGPUSupport() {
   if (!window.isSecureContext) return false;
@@ -27,7 +30,7 @@ async function checkWebGPUSupport() {
 async function loadKokoro() {
   if (kokoroTTS) return kokoroTTS;
   if (kokoroLoadPromise) return kokoroLoadPromise;
-  if (!kokoroAvailable) throw new Error('Kokoro engine marked as unavailable.');
+  if (!kokoroAvailable) throw new Error('Kokoro unavailable');
 
   isLoading = true;
   updateLoadingUI(true);
@@ -39,7 +42,7 @@ async function loadKokoro() {
 
       if (useWebGPU && await checkWebGPUSupport()) {
         try {
-          console.log('🔄 Attempting WebGPU pipeline initialization (FP32)...');
+          console.log('🔄 Attempting WebGPU pipeline...');
           kokoroTTS = await KokoroTTS.from_pretrained(modelId, {
             dtype: 'fp32',
             device: 'webgpu'
@@ -47,21 +50,20 @@ async function loadKokoro() {
           console.log('✅ Kokoro WebGPU ready');
           return kokoroTTS;
         } catch (gpuError) {
-          console.warn('⚠️ WebGPU failed at compilation tier, falling back to WASM:', gpuError.message);
-          useWebGPU = false; 
+          console.warn('⚠️ WebGPU failed, falling back to WASM:', gpuError.message);
+          useWebGPU = false;   // permanently switch to WASM
         }
       }
 
-      // Safe cross-device fallback pipeline (8-bit quantized)
       console.log('📦 Loading 8‑bit quantized WASM pipeline (~88MB) …');
       kokoroTTS = await KokoroTTS.from_pretrained(modelId, {
         dtype: 'q8',
         device: 'wasm'
       });
-      console.log('✅ Kokoro ready (WASM Mode)');
+      console.log('✅ Kokoro ready (WASM)');
       return kokoroTTS;
     } catch (err) {
-      console.error('❌ Critical failure initializing Kokoro:', err);
+      console.error('❌ Kokoro initialization failed:', err);
       kokoroAvailable = false;
       kokoroTTS = null;
       throw err;
@@ -88,11 +90,16 @@ function updateLoadingUI(show) {
 
 function setSpeaking(active) {
   isSpeaking = active;
+  isBotSpeaking = active;          // update global flag
   if (active) {
     clearTimeout(speakingTimeout);
-    speakingTimeout = setTimeout(() => { isSpeaking = false; }, 15000);
+    speakingTimeout = setTimeout(() => {
+      isSpeaking = false;
+      isBotSpeaking = false;
+    }, 15000);
   } else {
     clearTimeout(speakingTimeout);
+    isBotSpeaking = false;
   }
 }
 
@@ -104,12 +111,10 @@ function isFiniteAudio(arr) {
 
 async function playAudioBuffer(float32Array, sampleRate) {
   if (!isFiniteAudio(float32Array)) {
-    console.warn('⚠️ Non‑finite audio array produced – discarding generation frame.');
-    throw new Error('Non‑finite audio array returned.');
+    console.warn('⚠️ Non‑finite audio – discarding');
+    throw new Error('Non‑finite audio');
   }
-  
   stopSpeaking();
-  
   if (!currentAudioContext || currentAudioContext.state === 'closed') {
     currentAudioContext = new (window.AudioContext || window.webkitAudioContext)();
   }
@@ -119,24 +124,22 @@ async function playAudioBuffer(float32Array, sampleRate) {
   const safeRate = sampleRate && Number.isFinite(sampleRate) ? sampleRate : 24000;
   const buffer = ctx.createBuffer(1, float32Array.length, safeRate);
   buffer.getChannelData(0).set(float32Array);
-  
   const source = ctx.createBufferSource();
   source.buffer = buffer;
   source.connect(ctx.destination);
-  
   source.onended = () => {
     setSpeaking(false);
     currentSource = null;
-    // Safely re-engage microphone recording when playback settles
     if (activeEngine && activeEngine.isRunning && activeEngine.recognition) {
-      try { activeEngine.recognition.start(); } catch (e) { /* Ignore active logs */ }
+      try { activeEngine.recognition.start(); } catch (e) {}
     }
+    // Notify app that the bot finished speaking
+    window.dispatchEvent(new Event('botFinishedSpeaking'));
   };
-  
   setSpeaking(true);
   source.start(0);
   currentSource = source;
-  console.log('🔊 Local context buffer emitting audio successfully.');
+  console.log('🔊 Audio playing');
 }
 
 export function stopSpeaking() {
@@ -166,10 +169,10 @@ function cleanTextForTTS(text) {
 export async function speak(rawText, characterId) {
   if (!rawText) return;
   const text = cleanTextForTTS(rawText);
-  console.log('🔈 speak request initialized for:', text.slice(0, 50));
+  console.log('🔈 speak:', text.slice(0, 50));
   setSpeaking(true);
 
-  // Stop recognition to prevent the client from capturing its own speakers
+  // Mute microphone during speech
   if (activeEngine && activeEngine.recognition) {
     try { activeEngine.recognition.stop(); } catch (e) {}
   }
@@ -184,16 +187,11 @@ export async function speak(rawText, characterId) {
           try {
             result = await kokoroTTS.generate(text, { voice: voiceName });
           } catch (genError) {
-            const errStr = genError.message || String(genError);
-            // Catch structural or asynchronous WebGPU context crashes cleanly
-            if (useWebGPU && (errStr.includes('Device') || errStr.includes('lost') || errStr.includes('mapAsync'))) {
-              console.warn('🛑 WebGPU device lost or hung during runtime generation. Purging cache and defaulting to WASM.');
-              
+            if (useWebGPU && genError.message?.includes('Device')) {
+              console.warn('🛑 WebGPU device lost, falling back to WASM');
               useWebGPU = false;
               kokoroTTS = null;
-              kokoroLoadPromise = null; // ✅ FIXED: Clear the broken promise allocation to allow fresh pipeline build
-              
-              await loadKokoro(); // Reinitializes model weights safely in WebAssembly execution context
+              await loadKokoro();
               if (kokoroTTS) {
                 result = await kokoroTTS.generate(text, { voice: voiceName });
               } else {
@@ -203,18 +201,17 @@ export async function speak(rawText, characterId) {
               throw genError;
             }
           }
-
           const targetRate = result.sampling_rate || result.sample_rate || 24000;
           await playAudioBuffer(result.audio, targetRate);
           return;
         }
       }
     } catch (err) {
-      console.warn('Kokoro execution context broke. Engaging native browser Speech API:', err.message);
+      console.warn('Kokoro failed, using browser TTS:', err.message);
     }
   }
 
-  // OS Native Speech Synthesis fallback layers
+  // Fallback: browser Web Speech API
   const utterance = new SpeechSynthesisUtterance(text);
   const voice = getVoiceForCharacter(characterId);
   if (voice) utterance.voice = voice;
@@ -229,18 +226,20 @@ export async function speak(rawText, characterId) {
     if (activeEngine && activeEngine.isRunning && activeEngine.recognition) {
       try { activeEngine.recognition.start(); } catch (e) {}
     }
+    window.dispatchEvent(new Event('botFinishedSpeaking'));
   };
   utterance.onerror = () => {
     setSpeaking(false);
     if (activeEngine && activeEngine.isRunning && activeEngine.recognition) {
       try { activeEngine.recognition.start(); } catch (e) {}
     }
+    window.dispatchEvent(new Event('botFinishedSpeaking'));
   };
   speechSynthesis.speak(utterance);
 }
 
 // ---------------------------------------------------------------------------
-// AudioEngine Base Infrastructure
+// AudioEngine with 3‑second silence timer, mute/unmute, and self‑reply guard
 // ---------------------------------------------------------------------------
 export class AudioEngine {
   constructor(state, onUserSpeech) {
@@ -272,7 +271,7 @@ export class AudioEngine {
       this.drawWaves();
       this.soundClassifyLoop();
 
-      loadKokoro().catch(e => console.warn('Background preload caught:', e.message));
+      loadKokoro().catch(e => console.warn('Background Kokoro load:', e.message));
 
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       if (SpeechRecognition) {
@@ -308,14 +307,12 @@ export class AudioEngine {
         };
 
         this.recognition.onerror = (e) => console.warn('Speech recog error:', e.error);
-        
-        // ✅ FIXED: Prevent loop that forced the microphone back on during active text generation
-        this.recognition.onend = () => { 
+        this.recognition.onend = () => {
+          // Restart recognition if the engine is still supposed to be running
           if (this.isRunning && !isSpeaking) {
-            try { this.recognition.start(); } catch (e) {} 
-          } 
+            try { this.recognition.start(); } catch (e) {}
+          }
         };
-        
         this.recognition.start();
       }
       this.isRunning = true;
