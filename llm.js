@@ -18,14 +18,27 @@ export class LLMEngine {
     const messages = [
       { role: 'system', content: this.systemPrompt },
       ...this.state.compactedContext
-        .filter(m => m.role !== 'system')   // skip any old summary system msgs
+        .filter(m => m.role !== 'system')
         .slice(-5),
       { role: 'user', content: userMessage }
     ];
 
+    return this._tryProviders(messages);
+  }
+
+  // New method: accepts a pre‑built messages array (for injection of weather/news)
+  async chatWithMessages(messages) {
+    if (!this.state.llmKeys.groq && !this.state.llmKeys.cerebras && !this.state.llmKeys.openrouter) {
+      return "I need an API key. Set it in settings.";
+    }
+    return this._tryProviders(messages);
+  }
+
+  // Internal common logic to try all providers
+  async _tryProviders(messages) {
     let response;
 
-    // 1. Groq (free: llama-3.1-8b-instant)
+    // 1. Groq
     if (!this.exhausted.groq && this.state.llmKeys.groq) {
       try {
         response = await this.callGroq(messages);
@@ -70,7 +83,7 @@ export class LLMEngine {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: 'llama-3.1-8b-instant',   // ✅ current free model on Groq
+        model: 'llama-3.1-8b-instant',
         messages,
         max_tokens: 150,
         temperature: 0.9
@@ -93,7 +106,7 @@ export class LLMEngine {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: 'gpt-oss-120b',   // still works for you
+        model: 'gpt-oss-120b',
         messages,
         max_tokens: 150,
         temperature: 0.9
