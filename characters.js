@@ -56,8 +56,8 @@ export const CHARACTERS = {
     kokoroVoice: 'am_michael',
     voiceConfig: {
       preferredNames: ['Google US English Male', 'Whisper'],
-      pitch: 0.85,   // slightly deeper, softer
-      rate: 0.85     // slower, intimate
+      pitch: 0.85,
+      rate: 0.85
     }
   },
   alfred: {
