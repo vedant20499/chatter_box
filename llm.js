@@ -18,7 +18,7 @@ export class LLMEngine {
     const messages = [
       { role: 'system', content: this.systemPrompt },
       ...this.state.compactedContext
-        .filter(m => m.role !== 'system')
+        .filter(m => m.role !== 'system')   // skip any old summary system msgs
         .slice(-5),
       { role: 'user', content: userMessage }
     ];
@@ -93,7 +93,7 @@ export class LLMEngine {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: 'gpt-oss-120b',
+        model: 'gpt-oss-120b',   // still works for you
         messages,
         max_tokens: 150,
         temperature: 0.9
