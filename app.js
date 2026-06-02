@@ -252,7 +252,7 @@ async function getContextualInjection(userText) {
   const parts = [];
   const lower = userText.toLowerCase();
 
-  // Weather
+  // Weather (only if asked)
   const weatherInfo = await getWeatherInfo(userText);
   if (weatherInfo) {
     console.log('🌤️ Weather data retrieved:', weatherInfo);
@@ -281,22 +281,31 @@ async function getContextualInjection(userText) {
 }
 
 // ---------------------------------------------------------------------------
-// Weather (Open‑Meteo, no key) – with error logging
+// Weather (Open‑Meteo, no key) – ONLY fetches if user asked about weather
 // ---------------------------------------------------------------------------
 async function getWeatherInfo(userText) {
-  const patterns = [
+  const weatherPatterns = [
     /weather\s+(?:in|at|for)\s+([a-zA-Z\s]+?)(?:\?|$)/i,
     /what'?s?\s+the\s+weather\s+(?:in|at|for)\s+([a-zA-Z\s]+?)(?:\?|$)/i,
     /weather\s+([a-zA-Z\s]+?)(?:\?|$)/i
   ];
+
+  // Check if any weather pattern matches
   let location = null;
-  for (const p of patterns) {
+  for (const p of weatherPatterns) {
     const match = userText.match(p);
     if (match) {
-      location = match[1].trim();
+      location = match[1]?.trim() || null;
       break;
     }
   }
+
+  // If no weather pattern matched at all, return null – user didn't ask about weather
+  if (location === null && !weatherPatterns.some(p => p.test(userText))) {
+    return null;
+  }
+
+  // User asked about weather but maybe without a location – use default city
   if (!location && state.location) {
     location = state.location.city;
   }
@@ -304,16 +313,16 @@ async function getWeatherInfo(userText) {
 
   try {
     const geoRes = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(location)}&count=1&language=en&format=json`);
-    if (!geoRes.ok) throw new Error(`Geocoding failed with status ${geoRes.status}`);
+    if (!geoRes.ok) throw new Error(`Geocoding failed (${geoRes.status})`);
     const geoData = await geoRes.json();
     if (!geoData.results?.length) {
-      console.warn(`🌤️ Geocoding returned no results for "${location}"`);
+      console.warn(`🌤️ No geocoding results for "${location}"`);
       return null;
     }
     const { latitude, longitude, country } = geoData.results[0];
 
     const weatherRes = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current_weather=true`);
-    if (!weatherRes.ok) throw new Error(`Weather API failed with status ${weatherRes.status}`);
+    if (!weatherRes.ok) throw new Error(`Weather API failed (${weatherRes.status})`);
     const weatherData = await weatherRes.json();
     const current = weatherData.current_weather;
     if (!current) throw new Error('No current weather data');
@@ -328,10 +337,9 @@ async function getWeatherInfo(userText) {
 // News (RSS → rss2json, free, no key) – with fallback and logging
 // ---------------------------------------------------------------------------
 async function getNewsHeadlines() {
-  // Try multiple RSS feeds in order
   const rssFeeds = [
-    'https://feeds.npr.org/1004/rss.xml',       // NPR World News
-    'https://feeds.bbci.co.uk/news/world/rss.xml' // BBC World News
+    'https://feeds.npr.org/1004/rss.xml',
+    'https://feeds.bbci.co.uk/news/world/rss.xml'
   ];
 
   for (const rssUrl of rssFeeds) {
@@ -339,16 +347,23 @@ async function getNewsHeadlines() {
       console.log(`📰 Trying news feed: ${rssUrl}`);
       const encoded = encodeURIComponent(rssUrl);
       const res = await fetch(`https://api.rss2json.com/v1/api.json?rss_url=${encoded}`);
-      if (!res.ok) throw new Error(`rss2json returned ${res.status}`);
+      if (!res.ok) {
+        console.warn(`📰 rss2json returned ${res.status} for ${rssUrl}`);
+        continue;
+      }
       const data = await res.json();
       if (data.items?.length > 0) {
-        const headlines = data.items.slice(0, 5).map(item => item.title).join('; ');
-        return headlines;
+        return data.items.slice(0, 5).map(item => item.title).join('; ');
       } else {
         console.warn(`📰 Feed ${rssUrl} returned no items.`);
       }
     } catch (e) {
       console.error(`📰 News fetch failed for ${rssUrl}:`, e.message);
+      // Show a visible alert once
+      if (!window._newsErrorShown) {
+        alert('News fetch is currently failing. Please check the console for details.');
+        window._newsErrorShown = true;
+      }
     }
   }
   return null;
