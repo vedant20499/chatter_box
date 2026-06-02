@@ -5,7 +5,7 @@ import {
   showModal, hideModal, updateUserDisplay,
   setupSettingsUI
 } from './ui.js';
-import { AudioEngine } from './audio.js';
+import { AudioEngine, isBotSpeaking } from './audio.js';
 import { LLMEngine } from './llm.js';
 import { track } from './analytics.js';
 
@@ -84,9 +84,9 @@ window.addEventListener('load', async () => {
     if (data) state = FriendState.fromJSON(data);
   } catch (e) {}
 
-  // 3. Detect location (async, but don't block UI)
+  // 3. Detect location
   const location = await detectLocation();
-  state.location = location;   // store {city, country}
+  state.location = location;
   console.log('📍 Detected location:', location);
 
   // 4. Show appropriate UI
@@ -97,13 +97,10 @@ window.addEventListener('load', async () => {
       hideModal('modal-new-existing');
       showModal('modal-name');
     };
-
     document.getElementById('btn-existing').onclick = () => {
       hideModal('modal-new-existing');
       showModal('modal-upload');
     };
-
-    // Name → SSO modal (dummy buttons)
     document.getElementById('btn-name-next').onclick = () => {
       const name = document.getElementById('name-input').value.trim();
       if (!name) return alert('Please enter a name');
@@ -111,8 +108,6 @@ window.addEventListener('load', async () => {
       hideModal('modal-name');
       showModal('modal-sso');
     };
-
-    // Upload Markdown file
     document.getElementById('btn-restore').onclick = () => {
       const file = document.getElementById('md-upload').files[0];
       if (!file) return alert('Select a file');
@@ -131,7 +126,6 @@ window.addEventListener('load', async () => {
       };
       reader.readAsText(file);
     };
-
     // SSO dummy buttons
     document.getElementById('btn-google').onclick = () => alert('Google Sign‑In coming soon!');
     document.getElementById('btn-instagram-sso').onclick = () => alert('Instagram connect coming soon!');
@@ -144,7 +138,6 @@ window.addEventListener('load', async () => {
     maybeStartApp();
   }
 
-  // Settings button (always available)
   document.getElementById('settings-btn').onclick = () => {
     setupSettingsUI(state, llm, () => saveStateToKV());
     showModal('modal-settings');
@@ -177,16 +170,23 @@ async function startMain() {
   audioEngine = new AudioEngine(state, handleUserSpeech);
   await audioEngine.start();
 
-  // Proactive chat loop (25 seconds of silence triggers a random topic)
+  // Proactive chat – 45 seconds of true silence
   lastSpeechTime = Date.now();
   proactiveInterval = setInterval(async () => {
     if (!audioEngine || !audioEngine.isRunning) return;
+    if (isBotSpeaking) return;               // don't interrupt bot
+
     const silenceDuration = (Date.now() - lastSpeechTime) / 1000;
-    if (silenceDuration > 25) {
+    if (silenceDuration > 45) {
       await proactiveChat();
-      lastSpeechTime = Date.now();   // reset timer
+      lastSpeechTime = Date.now();
     }
   }, 5000);
+
+  // Reset silence timer when bot finishes speaking
+  window.addEventListener('botFinishedSpeaking', () => {
+    lastSpeechTime = Date.now();
+  });
 
   window.addEventListener('beforeunload', () => {
     saveStateToKV();
@@ -211,7 +211,6 @@ async function handleUserSpeech(transcript) {
   messageCounterSinceSave++;
   console.log('🧑 User:', transcript);
 
-  // Build the messages array
   const messages = [
     { role: 'system', content: llm.systemPrompt },
     ...state.compactedContext.filter(m => m.role !== 'system').slice(-5),
@@ -262,7 +261,7 @@ async function getContextualInjection(userText) {
     if (headlines) parts.push(`Latest headlines: ${headlines}`);
   }
 
-  // Always append general location context (unless weather already provides it)
+  // Always append general location context (if not already about weather)
   if (!weatherInfo && state.location) {
     parts.push(`The user's approximate location is ${state.location.city}, ${state.location.country}.`);
   }
