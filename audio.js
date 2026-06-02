@@ -20,15 +20,27 @@ async function loadKokoro() {
   kokoroLoadPromise = (async () => {
     try {
       const { KokoroTTS } = await import('kokoro-js');
-      console.log('🔄 Loading Kokoro TTS model (~80MB) …');
-      kokoroTTS = await KokoroTTS.from_pretrained(
-        'onnx-community/Kokoro-82M-v1.0-ONNX',
-        { dtype: 'q8', device: 'wasm' }
-      );
-      console.log('✅ Kokoro ready');
+      
+      // FIX: Try ultra-fast WebGPU first, fallback to WASM if unsupported
+      try {
+        console.log('🔄 Loading Kokoro TTS model via WebGPU (~80MB) …');
+        kokoroTTS = await KokoroTTS.from_pretrained(
+          'onnx-community/Kokoro-82M-v1.0-ONNX',
+          { dtype: 'fp16', device: 'webgpu' }
+        );
+        console.log('✅ Kokoro initialized with WebGPU acceleration.');
+      } catch (webgpuError) {
+        console.warn('⚠️ WebGPU initialization failed, falling back to WASM CPU processing...', webgpuError.message);
+        kokoroTTS = await KokoroTTS.from_pretrained(
+          'onnx-community/Kokoro-82M-v1.0-ONNX',
+          { dtype: 'q8', device: 'wasm' }
+        );
+        console.log('✅ Kokoro ready (WASM Mode)');
+      }
+      
       return kokoroTTS;
     } catch (err) {
-      console.error('❌ Kokoro failed:', err);
+      console.error('❌ Kokoro failed entirely:', err);
       kokoroAvailable = false;
       kokoroTTS = null;
       throw err;
@@ -87,15 +99,16 @@ async function playAudioBuffer(float32Array, sampleRate) {
 
   stopSpeaking();
 
-  const ctx = new (window.AudioContext || window.webkitAudioContext)();
-  currentAudioContext = ctx;
+  // FIX: Reuse the global AudioContext instead of spawning a new instance every time
+  if (!currentAudioContext || currentAudioContext.state === 'closed') {
+    currentAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  const ctx = currentAudioContext;
 
-  // Resume if suspended
   if (ctx.state === 'suspended') {
     await ctx.resume();
   }
 
-  // Ensure sampleRate is a finite float before invoking createBuffer
   const safeSampleRate = sampleRate && Number.isFinite(sampleRate) ? sampleRate : 24000;
 
   const audioBuffer = ctx.createBuffer(1, float32Array.length, safeSampleRate);
@@ -119,9 +132,9 @@ async function playAudioBuffer(float32Array, sampleRate) {
 export function stopSpeaking() {
   try {
     if (currentSource) { currentSource.stop(); currentSource = null; }
-    if (currentAudioContext && currentAudioContext.state !== 'closed') {
-      currentAudioContext.close();
-      currentAudioContext = null;
+    // FIX: Do not close context here to allow instantaneous reuse next cycle
+    if (currentAudioContext && currentAudioContext.state === 'running') {
+      currentAudioContext.suspend();
     }
   } catch (e) { /* ignore */ }
   speechSynthesis.cancel();
@@ -143,8 +156,6 @@ export async function speak(text, characterId) {
         const voiceName = getKokoroVoice(characterId);
         if (voiceName) {
           const result = await kokoroTTS.generate(text, { voice: voiceName });
-          
-          // Guard against variations in ONNX runner metadata properties
           const targetSampleRate = result.sampling_rate || result.sample_rate || 24000;
           
           await playAudioBuffer(result.audio, targetSampleRate);
@@ -210,6 +221,9 @@ export class AudioEngine {
       this.drawWaves();
       this.soundClassifyLoop();
 
+      // FIX: Warm up and load the Kokoro model in the background immediately on startup
+      loadKokoro().catch((e) => console.warn('Background Kokoro pre-load failed:', e.message));
+
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       if (SpeechRecognition) {
         this.recognition = new SpeechRecognition();
@@ -220,7 +234,10 @@ export class AudioEngine {
         this.recognition.onresult = (event) => {
           clearTimeout(this.silenceTimeout);
 
-          if (isSpeaking) return;
+          if (isSpeaking) {
+            this.lastInterimTranscript = '';
+            return;
+          }
 
           let interim = '', final = '';
           for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -232,7 +249,10 @@ export class AudioEngine {
           if (interim) this.lastInterimTranscript = final + interim;
 
           this.silenceTimeout = setTimeout(() => {
-            if (isSpeaking) return;
+            if (isSpeaking) {
+              this.lastInterimTranscript = '';
+              return;
+            }
             const transcript = this.lastInterimTranscript.trim();
             if (transcript && this.onUserSpeech) {
               console.log('🎤 final transcript (after silence):', transcript);
@@ -295,13 +315,27 @@ export class AudioEngine {
 
   soundClassifyLoop() {
     setInterval(() => {
-      if (!this.isRunning) return;
-      if (Math.random() < 0.05 && !this.musicCooldown) {
+      // FIX: Guard checks. If stopped, or if AI is currently talking, exit immediately.
+      if (!this.isRunning || isSpeaking) return;
+
+      const bufferLength = this.analyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+      this.analyser.getByteFrequencyData(dataArray);
+
+      // Analyze ambient sound amplitude
+      let frequencyVolumeSum = 0;
+      for (let i = 0; i < bufferLength; i++) {
+        frequencyVolumeSum += dataArray[i];
+      }
+      const averageVolume = frequencyVolumeSum / bufferLength;
+
+      // FIX: Only trigger music events if there's real acoustic energy in the room (Threshold > 35)
+      if (averageVolume > 35 && Math.random() < 0.15 && !this.musicCooldown) {
         if (this.onUserSpeech) this.onUserSpeech('__MUSIC_DETECTED__');
         this.musicCooldown = true;
         setTimeout(() => { this.musicCooldown = false; }, 30000);
       }
-    }, 5000);
+    }, 4000);
   }
 
   speak(text, characterId) {
