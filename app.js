@@ -10,7 +10,7 @@ import { LLMEngine } from './llm.js';
 import { track } from './analytics.js';
 
 // ---------------------------------------------------------------------------
-// System theme detection (must run before anything else)
+// System theme detection (runs before anything else)
 // ---------------------------------------------------------------------------
 (function setInitialTheme() {
   const savedTheme = localStorage.getItem('theme');
@@ -23,7 +23,7 @@ import { track } from './analytics.js';
 })();
 
 // ---------------------------------------------------------------------------
-// Persistent UUID (no Google Cloud needed)
+// Application state
 // ---------------------------------------------------------------------------
 let state = new FriendState();
 let audioEngine;
@@ -39,7 +39,7 @@ window.addEventListener('load', async () => {
   }
   state.uuid = uuid;
 
-  // 2. Normal startup: try to fetch saved state from Vercel KV (ignore errors)
+  // 2. Try to restore state from Vercel KV (ignore errors)
   try {
     const res = await fetch(`/api/state?uuid=${uuid}`);
     const data = await res.json();
@@ -81,7 +81,7 @@ window.addEventListener('load', async () => {
       reader.onload = (e) => {
         try {
           const restored = FriendState.fromJSON(e.target.result);
-          restored.uuid = uuid;   // keep our local UUID
+          restored.uuid = uuid;          // keep our local UUID
           state = restored;
           saveStateToKV();
           hideModal('modal-upload');
@@ -107,7 +107,7 @@ window.addEventListener('load', async () => {
     maybeStartApp();
   }
 
-  // Settings button always available
+  // Settings button (always available)
   document.getElementById('settings-btn').onclick = () => {
     setupSettingsUI(state, llm, async () => {
       await saveStateToKV();
@@ -137,16 +137,14 @@ async function startMain() {
   updateUserDisplay(state);
   track('main_started', { character: state.character });
 
-  // Initialize LLM
+  // Initialize LLM with personalised system prompt
   llm = new LLMEngine(state);
-  llm.setSystemPrompt(CHARACTERS[state.character].prompt);
+  const rawPrompt = CHARACTERS[state.character].prompt;
+  llm.setSystemPrompt(rawPrompt.replace('{{userName}}', state.name || 'my friend'));
 
-  // Initialize audio engine with speech handler
+  // Initialize audio engine (starts mic, STT, etc.)
   audioEngine = new AudioEngine(state, handleUserSpeech);
   await audioEngine.start();
-
-  // Instagram / Spotify connect buttons (dummy for now, but buttons are visible)
-  // You can later replace these with real OAuth flows
 
   // Auto‑save state to Vercel KV on tab close
   window.addEventListener('beforeunload', () => {
@@ -155,7 +153,7 @@ async function startMain() {
     downloadMarkdown(state);
   });
 
-  // Periodic auto‑save every 10 messages (messageCounterSinceSave is incremented in handleUserSpeech)
+  // Periodic auto‑save every 10 messages
   setInterval(() => {
     if (messageCounterSinceSave >= 10) {
       saveStateToKV();
@@ -166,7 +164,7 @@ async function startMain() {
 
 // ---------------------------------------------------------------------------
 // Speech handler (called after 3s silence + noise gate – see audio.js)
-// Now with drastically reduced background LLM calls
+// Now with console logging and delayed compaction
 // ---------------------------------------------------------------------------
 async function handleUserSpeech(transcript) {
   if (!llm || !audioEngine) return;
@@ -182,57 +180,53 @@ async function handleUserSpeech(transcript) {
   state.messageCount++;
   messageCounterSinceSave++;
 
-  // Main reply
+  console.log('🧑 User:', transcript);
+
   const response = await llm.chat(transcript);
   if (!response) return;
+
+  console.log('🤖 Bot:', response);
 
   audioEngine.speak(response, state.character);
   state.compactedContext.push({ role: 'user', content: transcript });
   state.compactedContext.push({ role: 'assistant', content: response });
   track('message_exchanged', { count: state.messageCount });
 
-  // Background tasks: run rarely and with a delay to avoid rate limits
+  // Delayed compaction – avoids rapid API calls and gives the user time to hear the reply
   setTimeout(async () => {
-    if (state.messageCount % 30 === 0) {
-      await compactContext();
-    } else if (state.messageCount % 80 === 0) {
-      await updatePersonality();
-    }
-  }, 600);
+    if (!audioEngine || !audioEngine.isRunning) return;
+    await maybeCompact();
+  }, 2000);
 }
 
 // ---------------------------------------------------------------------------
-// Conversation compaction (keeps context short)
+// Smart conversation compaction (summarise old messages, keep last 5 raw)
 // ---------------------------------------------------------------------------
-async function compactContext() {
-  if (!llm) return;
-  const recent = state.compactedContext.slice(-5);
-  const summary = state.lastSummary;
-  const prompt = `Summarize the following conversation in one paragraph, keeping important details. Previous summary: "${summary}"\nRecent messages: ${JSON.stringify(recent)}`;
-  try {
-    const result = await llm.chat(prompt);
-    if (result) {
-      state.lastSummary = result;
-      state.compactedContext = recent.concat([
-        { role: 'system', content: `[Summary: ${result}]` }
-      ]);
-    }
-  } catch (e) { /* ignore */ }
+async function maybeCompact() {
+  const CONTEXT_LIMIT = 10;   // keep the last 10 messages raw, summarise the rest
+  if (state.compactedContext.length > CONTEXT_LIMIT) {
+    const recent = state.compactedContext.slice(-5);
+    const older = state.compactedContext.slice(0, -5);
+    if (older.length === 0) return;
+
+    const summary = await generateSummary(older, state.lastSummary);
+    state.lastSummary = summary;
+    state.compactedContext = [
+      { role: 'system', content: `[Conversation history: ${summary}]` },
+      ...recent
+    ];
+  }
 }
 
-// ---------------------------------------------------------------------------
-// Personality octagon update
-// ---------------------------------------------------------------------------
-async function updatePersonality() {
-  if (!llm) return;
-  const recent = state.compactedContext.slice(-10);
-  const prompt = `Based on these messages, rate the user's personality on a scale of 0 to 1 for these dimensions: openness, conscientiousness, extraversion, agreeableness, emotional stability, humor/playfulness, curiosity, assertiveness. Return JSON only. Messages: ${JSON.stringify(recent)}`;
+async function generateSummary(messages, existingSummary) {
+  if (!llm) return existingSummary || '';
+  const prompt = `Summarize this conversation in one paragraph (max 4 sentences), keeping important facts and names. Previous summary: "${existingSummary}". Messages: ${JSON.stringify(messages)}`;
   try {
     const result = await llm.chat(prompt);
-    const newTraits = JSON.parse(result);
-    state.personality = { ...state.personality, ...newTraits };
-    track('personality_updated');
-  } catch (e) { /* ignore */ }
+    return result || existingSummary || '';
+  } catch (e) {
+    return existingSummary || '';
+  }
 }
 
 // ---------------------------------------------------------------------------
