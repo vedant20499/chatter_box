@@ -36,6 +36,15 @@ export function setupSettingsUI(state, llmEngine, onSaveCallback) {
   openrouterInput.value = state.llmKeys.openrouter || '';
   themeSelect.value = document.body.classList.contains('dark') ? 'dark' : 'light';
 
+  const onEnterSave = (e) => {
+    if (e.key === 'Enter') {
+      document.getElementById('btn-save-settings').click();
+    }
+  };
+  groqInput.addEventListener('keydown', onEnterSave);
+  cerebrasInput.addEventListener('keydown', onEnterSave);
+  openrouterInput.addEventListener('keydown', onEnterSave);
+
   document.getElementById('btn-save-settings').onclick = () => {
     state.character = charSelect.value;
     state.llmKeys.groq = groqInput.value.trim();

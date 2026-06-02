@@ -29,6 +29,13 @@ let messageCounterSinceSave = 0;
 let lastSpeechTime = 0;
 let proactiveInterval = null;
 
+// Cache: weather results keyed by location name, expires after 30 minutes
+const weatherCache = new Map(); // key -> { result, timestamp }
+const WEATHER_CACHE_TTL = 30 * 60 * 1000; // 30 minutes in ms
+
+// Location context: only inject once per session so it doesn't pollute every prompt
+let locationInjectedOnce = false;
+
 // ---------------------------------------------------------------------------
 // Expression Parser & Emoji Mapping
 // ---------------------------------------------------------------------------
@@ -192,6 +199,12 @@ window.addEventListener('load', async () => {
       hideModal('modal-new-existing');
       showModal('modal-upload');
     };
+    document.getElementById('name-input').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        document.getElementById('btn-name-next').click();
+      }
+    });
+
     document.getElementById('btn-name-next').onclick = () => {
       const name = document.getElementById('name-input').value.trim();
       if (!name) return alert('Please enter a name');
@@ -370,13 +383,11 @@ async function getContextualInjection(userText) {
   const parts = [];
   const lower = userText.toLowerCase();
 
-  // Weather (only if asked)
+  // Weather (only if the user explicitly asked about weather, uses cache)
   const weatherInfo = await getWeatherInfo(userText);
   if (weatherInfo) {
-    console.log('🌤️ Weather data retrieved:', weatherInfo);
+    console.log('🌤️ Weather data retrieved (from cache or API):', weatherInfo);
     parts.push(`Current weather: ${weatherInfo}`);
-  } else {
-    console.log('🌤️ No weather data matched.');
   }
 
   // News (support search topics or general news/current situation)
@@ -391,16 +402,21 @@ async function getContextualInjection(userText) {
     }
   }
 
-  // Location context (only if no weather data)
-  if (!weatherInfo && state.location) {
-    parts.push(`The user's approximate location is ${state.location.city}, ${state.location.country}.`);
+  // Location context: inject only once per session and only when not already
+  // providing weather data (which implies location). This prevents the bot from
+  // awkwardly shoehorning location into every single unrelated reply.
+  if (!weatherInfo && !locationInjectedOnce && state.location) {
+    parts.push(`(Context: the user is located in ${state.location.city}, ${state.location.country}. Only mention this if it's actually relevant to the topic.)`);
+    locationInjectedOnce = true;
+    console.log('📍 Location context injected for the first time this session.');
   }
 
   return parts.length > 0 ? parts.join('\n') : null;
 }
 
 // ---------------------------------------------------------------------------
-// Weather (Open‑Meteo, no key) – ONLY fetches if user asked about weather
+// Weather (Open-Meteo, no key) – ONLY fetches if user asked about weather.
+// Results are cached per location name for 30 minutes.
 // ---------------------------------------------------------------------------
 async function getWeatherInfo(userText) {
   const weatherPatterns = [
@@ -430,6 +446,15 @@ async function getWeatherInfo(userText) {
   }
   if (!location) return null;
 
+  const cacheKey = location.toLowerCase();
+
+  // Return cached result if still fresh
+  const cached = weatherCache.get(cacheKey);
+  if (cached && (Date.now() - cached.timestamp) < WEATHER_CACHE_TTL) {
+    console.log(`🌤️ Weather cache HIT for "${location}" (${Math.round((Date.now() - cached.timestamp) / 60000)}min old)`);
+    return cached.result;
+  }
+
   try {
     const geoRes = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(location)}&count=1&language=en&format=json`);
     if (!geoRes.ok) throw new Error(`Geocoding failed (${geoRes.status})`);
@@ -445,7 +470,12 @@ async function getWeatherInfo(userText) {
     const weatherData = await weatherRes.json();
     const current = weatherData.current_weather;
     if (!current) throw new Error('No current weather data');
-    return `${location} (${country}): ${current.temperature}°C, wind ${current.windspeed} km/h`;
+    const result = `${location} (${country}): ${current.temperature}°C, wind ${current.windspeed} km/h`;
+
+    // Store in cache
+    weatherCache.set(cacheKey, { result, timestamp: Date.now() });
+    console.log(`🌤️ Weather API fetched and cached for "${location}"`);
+    return result;
   } catch (e) {
     console.error('🌤️ Weather fetch error:', e.message);
     return null;

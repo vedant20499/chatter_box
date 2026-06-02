@@ -276,7 +276,7 @@ export class AudioEngine {
       this.analyser = this.audioCtx.createAnalyser();
       this.analyser.fftSize = 256;
       source.connect(this.analyser);
-
+      this.isRunning = true;
       this.drawWaves();
       this.soundClassifyLoop();
 
@@ -342,7 +342,6 @@ export class AudioEngine {
         };
         this.recognition.start();
       }
-      this.isRunning = true;
     } catch (err) {
       console.error('Mic access failed:', err);
     }
