@@ -2,17 +2,46 @@
 import { getVoiceForCharacter, CHARACTERS } from './characters.js';
 
 // ---------------------------------------------------------------------------
-// Kokoro TTS (dynamic import, safe fallback)
+// Engine State & Feature Flags
 // ---------------------------------------------------------------------------
 let kokoroTTS = null;
 let kokoroLoadPromise = null;
 let isLoading = false;
 let kokoroAvailable = true;
+let isSpeaking = false;
+let speakingTimeout = null;
+let currentAudioContext = null;
+let currentSource = null;
 
+/**
+ * Validates system capabilities before allocating expensive model memory.
+ * Ensures your public link handles Chrome's strict security policies.
+ */
+async function checkWebGPUSupport() {
+  if (!window.isSecureContext) {
+    console.warn("⚠️ App is running in an insecure context. Chrome disables WebGPU on non-HTTPS links.");
+    return false;
+  }
+  if (!navigator.gpu) {
+    console.log("ℹ️ WebGPU is not natively exposed or supported on this browser engine.");
+    return false;
+  }
+  try {
+    const adapter = await navigator.gpu.requestAdapter();
+    return !!adapter;
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * Progressively loads the Text-to-Speech model.
+ * Fallbacks seamlessly from FP32 WebGPU to 8-bit quantized WASM.
+ */
 async function loadKokoro() {
   if (kokoroTTS) return kokoroTTS;
   if (kokoroLoadPromise) return kokoroLoadPromise;
-  if (!kokoroAvailable) throw new Error('Kokoro unavailable');
+  if (!kokoroAvailable) throw new Error('Kokoro engine marked as unavailable.');
 
   isLoading = true;
   updateLoadingUI(true);
@@ -20,27 +49,34 @@ async function loadKokoro() {
   kokoroLoadPromise = (async () => {
     try {
       const { KokoroTTS } = await import('kokoro-js');
-      
-      // Try ultra-fast WebGPU acceleration tier first
-      try {
-        console.log('🔄 Loading Kokoro TTS model via WebGPU (~80MB) …');
-        kokoroTTS = await KokoroTTS.from_pretrained(
-          'onnx-community/Kokoro-82M-v1.0-ONNX',
-          { dtype: 'fp16', device: 'webgpu' }
-        );
-        console.log('✅ Kokoro initialized with WebGPU acceleration.');
-      } catch (webgpuError) {
-        console.warn('⚠️ WebGPU initialization failed, falling back to WASM CPU processing...', webgpuError.message);
-        kokoroTTS = await KokoroTTS.from_pretrained(
-          'onnx-community/Kokoro-82M-v1.0-ONNX',
-          { dtype: 'q8', device: 'wasm' }
-        );
-        console.log('✅ Kokoro ready (WASM Mode)');
+      const hasWebGPU = await checkWebGPUSupport();
+      const modelId = 'onnx-community/Kokoro-82M-v1.0-ONNX';
+
+      if (hasWebGPU) {
+        try {
+          console.log('🔄 WebGPU Verified. Allocating FP32 Accelerated Pipeline (~326MB)...');
+          kokoroTTS = await KokoroTTS.from_pretrained(modelId, { 
+            dtype: 'fp32', 
+            device: 'webgpu' 
+          });
+          console.log('✅ Kokoro initialized successfully with WebGPU hardware acceleration.');
+          return kokoroTTS;
+        } catch (gpuError) {
+          console.warn('⚠️ WebGPU compilation failed. Dropping back to WebAssembly context...', gpuError.message);
+        }
       }
-      
+
+      // Public distribution fallback: Runs smoothly on 90%+ of systems (Mobile, older browsers)
+      console.log('📦 Allocating Optimized 8-bit Quantized WASM Pipeline (~88MB)...');
+      kokoroTTS = await KokoroTTS.from_pretrained(modelId, { 
+        dtype: 'q8', 
+        device: 'wasm' 
+      });
+      console.log('✅ Kokoro fallback ready (WASM Mode)');
       return kokoroTTS;
+
     } catch (err) {
-      console.error('❌ Kokoro failed:', err);
+      console.error('❌ Kokoro initialization pipeline collapsed:', err);
       kokoroAvailable = false;
       kokoroTTS = null;
       throw err;
@@ -65,10 +101,6 @@ function updateLoadingUI(show) {
   }
 }
 
-// ---------- Speaking state ----------
-let isSpeaking = false;
-let speakingTimeout = null;
-
 function setSpeaking(active) {
   isSpeaking = active;
   if (active) {
@@ -79,10 +111,6 @@ function setSpeaking(active) {
   }
 }
 
-// Audio playback helpers
-let currentAudioContext = null;
-let currentSource = null;
-
 function isFiniteAudio(float32Array) {
   if (!float32Array || float32Array.length === 0) return false;
   for (let i = 0; i < float32Array.length; i++) {
@@ -91,15 +119,18 @@ function isFiniteAudio(float32Array) {
   return true;
 }
 
+/**
+ * Handles raw float processing and passes it to the system audio node.
+ */
 async function playAudioBuffer(float32Array, sampleRate) {
   if (!isFiniteAudio(float32Array)) {
-    console.warn('⚠️ Kokoro produced non‑finite audio – discarding');
-    throw new Error('Non‑finite audio data from Kokoro');
+    console.warn('⚠️ Audio buffer contains corrupt or non-finite sequences. Dropping generation slice.');
+    throw new Error('Non‑finite audio array data passed from generator.');
   }
 
   stopSpeaking();
 
-  // Reuse hot AudioContext to eliminate generation lag between sentences
+  // Reuse running context to mitigate instantiation overheads
   if (!currentAudioContext || currentAudioContext.state === 'closed') {
     currentAudioContext = new (window.AudioContext || window.webkitAudioContext)();
   }
@@ -110,7 +141,6 @@ async function playAudioBuffer(float32Array, sampleRate) {
   }
 
   const safeSampleRate = sampleRate && Number.isFinite(sampleRate) ? sampleRate : 24000;
-
   const audioBuffer = ctx.createBuffer(1, float32Array.length, safeSampleRate);
   audioBuffer.getChannelData(0).set(float32Array);
 
@@ -126,17 +156,19 @@ async function playAudioBuffer(float32Array, sampleRate) {
   setSpeaking(true);
   source.start(0);
   currentSource = source;
-  console.log('🔊 Audio playing (Kokoro)');
+  console.log('🔊 Local playback pipeline emitting stream successfully.');
 }
 
 export function stopSpeaking() {
   try {
-    if (currentSource) { currentSource.stop(); currentSource = null; }
-    // Suspend instead of killing context to allow instantaneous initialization next cycle
+    if (currentSource) { 
+      currentSource.stop(); 
+      currentSource = null; 
+    }
     if (currentAudioContext && currentAudioContext.state === 'running') {
       currentAudioContext.suspend();
     }
-  } catch (e) { /* ignore */ }
+  } catch (e) { /* Catch silent errors from uninitialized streams */ }
   speechSynthesis.cancel();
   setSpeaking(false);
 }
@@ -146,12 +178,13 @@ function getKokoroVoice(characterId) {
   return char?.kokoroVoice || null;
 }
 
-// Public speak function – Kokoro first, then Web Speech API
+/**
+ * Primary text rendering loop. Automatically tests for Kokoro viability
+ * before gracefully backing off to native Web Speech APIs.
+ */
 export async function speak(text, characterId) {
   if (!text) return;
-
-  console.log('🔈 speak() called with:', text.slice(0, 50));
-
+  console.log('🔈 Synthesis requested for chunk:', text.slice(0, 50));
   setSpeaking(true);
 
   if (kokoroAvailable) {
@@ -162,8 +195,8 @@ export async function speak(text, characterId) {
         if (voiceName) {
           const result = await kokoroTTS.generate(text, { voice: voiceName });
           
-          // Debug telemetry block executed safely inside execution scope
-          console.log("Kokoro Output Debug:", {
+          // Debug telemetry output matrix
+          console.log("Kokoro Output Telemetry:", {
             isAudioValid: !!result.audio,
             audioLength: result.audio ? result.audio.length : 'N/A',
             sampleRate: result.sampleRate,
@@ -176,11 +209,11 @@ export async function speak(text, characterId) {
         }
       }
     } catch (err) {
-      console.warn('🎤 Kokoro TTS failed, using browser TTS:', err.message);
+      console.warn('🎤 Premium synthesis layer glitched. Engaging native OS voices:', err.message);
     }
   }
 
-  // Fallback: browser Web Speech API
+  // Final cross-platform fallback logic: Local OS Speech Engine
   const utterance = new SpeechSynthesisUtterance(text);
   const voice = getVoiceForCharacter(characterId);
   if (voice) utterance.voice = voice;
@@ -199,7 +232,7 @@ export async function speak(text, characterId) {
 }
 
 // ---------------------------------------------------------------------------
-// AudioEngine with 3‑second silence timer and self‑reply guard
+// AudioEngine Infrastructure 
 // ---------------------------------------------------------------------------
 export class AudioEngine {
   constructor(state, onUserSpeech) {
@@ -217,10 +250,18 @@ export class AudioEngine {
     this.SILENCE_DELAY = 3000;
   }
 
+  /**
+   * Must be called explicitly from an interactive screen boundary (e.g., "Start Chat" button)
+   * to resolve Chrome's Autoplay Interaction Gate policies on public links.
+   */
   async start() {
     try {
       this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      
+      // Mirror the context to the playback pipeline to satisfy Chrome user-gesture locks
+      currentAudioContext = this.audioCtx;
+
       const source = this.audioCtx.createMediaStreamSource(this.stream);
       this.analyser = this.audioCtx.createAnalyser();
       this.analyser.fftSize = 256;
@@ -229,8 +270,8 @@ export class AudioEngine {
       this.drawWaves();
       this.soundClassifyLoop();
 
-      // Warm up and pre-load model into local background cache immediately at runtime startup
-      loadKokoro().catch((e) => console.warn('Background Kokoro pre-load failed:', e.message));
+      // Silently pre-fetch model weights into the client cache on initialization
+      loadKokoro().catch((e) => console.warn('Background caching stream handled:', e.message));
 
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       if (SpeechRecognition) {
@@ -241,10 +282,9 @@ export class AudioEngine {
 
         this.recognition.onresult = (event) => {
           clearTimeout(this.silenceTimeout);
-
-          if (isSpeaking) {
-            this.lastInterimTranscript = '';
-            return;
+          if (isSpeaking) { 
+            this.lastInterimTranscript = ''; 
+            return; 
           }
 
           let interim = '', final = '';
@@ -257,29 +297,26 @@ export class AudioEngine {
           if (interim) this.lastInterimTranscript = final + interim;
 
           this.silenceTimeout = setTimeout(() => {
-            if (isSpeaking) {
-              this.lastInterimTranscript = '';
-              return;
+            if (isSpeaking) { 
+              this.lastInterimTranscript = ''; 
+              return; 
             }
             const transcript = this.lastInterimTranscript.trim();
             if (transcript && this.onUserSpeech) {
-              console.log('🎤 final transcript (after silence):', transcript);
               this.onUserSpeech(transcript);
               this.lastInterimTranscript = '';
             }
           }, this.SILENCE_DELAY);
         };
 
-        this.recognition.onerror = (e) => {
-          if (e.error !== 'no-speech') console.warn('Speech recog error:', e.error);
+        this.recognition.onend = () => { 
+          if (this.isRunning) this.recognition.start(); 
         };
-
-        this.recognition.onend = () => { if (this.isRunning) this.recognition.start(); };
         this.recognition.start();
       }
       this.isRunning = true;
     } catch (err) {
-      console.error('Mic access failed:', err);
+      console.error('Critical Failure: Microphone configuration rejected by system policies:', err);
     }
   }
 
@@ -298,7 +335,7 @@ export class AudioEngine {
       ctx.clearRect(0, 0, width, height);
 
       ctx.beginPath();
-      ctx.arc(width/2, height/2, width/2 - 2, 0, Math.PI * 2);
+      ctx.arc(width / 2, height / 2, Math.max(1, width / 2 - 2), 0, Math.PI * 2);
       ctx.strokeStyle = 'rgba(0, 188, 212, 0.2)';
       ctx.lineWidth = 1;
       ctx.stroke();
@@ -323,20 +360,17 @@ export class AudioEngine {
 
   soundClassifyLoop() {
     setInterval(() => {
-      // Loop Guard: exit immediately if context is halted or if the AI itself is speaking
       if (!this.isRunning || isSpeaking) return;
-
       const bufferLength = this.analyser.frequencyBinCount;
       const dataArray = new Uint8Array(bufferLength);
       this.analyser.getByteFrequencyData(dataArray);
 
       let frequencyVolumeSum = 0;
-      for (let i = 0; i < bufferLength; i++) {
-        frequencyVolumeSum += dataArray[i];
+      for (let i = 0; i < bufferLength; i++) { 
+        frequencyVolumeSum += dataArray[i]; 
       }
       const averageVolume = frequencyVolumeSum / bufferLength;
 
-      // Filter disturbances by requiring persistent environmental energy (Threshold > 35) before random firing
       if (averageVolume > 35 && Math.random() < 0.15 && !this.musicCooldown) {
         if (this.onUserSpeech) this.onUserSpeech('__MUSIC_DETECTED__');
         this.musicCooldown = true;
@@ -345,8 +379,8 @@ export class AudioEngine {
     }, 5000);
   }
 
-  speak(text, characterId) {
-    speak(text, characterId);
+  speak(text, characterId) { 
+    speak(text, characterId); 
   }
 
   stop() {
