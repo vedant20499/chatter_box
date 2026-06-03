@@ -417,26 +417,18 @@ async function getWeatherInfo(userText) {
 
   let location = null;
   
-  // 1. Try reverse location match like: "Bengaluru weather"
-  const reverseMatch = userText.match(/\b([a-zA-Z\s]+?)\s+(?:weather|forecast|temp|temperature|rain)\b/i);
-  if (reverseMatch) {
-    location = reverseMatch[1].trim();
-  }
-  
-  // 2. Try forward location match like: "weather in Bengaluru"
-  if (!location) {
-    const locationPatterns = [
-      /(?:in|at|for|of)\s+([a-zA-Z\s]+?)(?:\?|$|today|tomorrow|now|currently|please)/i,
-      /(?:weather|forecast|temperature|temp|rain)\s+([a-zA-Z\s]+?)(?:\?|$|today|tomorrow|now|currently|please)/i
-    ];
-    for (const p of locationPatterns) {
-      const match = userText.match(p);
-      if (match) {
-        const candidate = match[1]?.trim();
-        if (candidate && !['today', 'tomorrow', 'now', 'the', 'a', 'an', 'this', 'next', 'me', 'us'].includes(candidate.toLowerCase())) {
-          location = candidate;
-          break;
-        }
+  const locationPatterns = [
+    /(?:weather|forecast|temperature|temp|rain)\s+(?:in|at|for|of)\s+([a-zA-Z\s]+?)(?:\?|$|today|tomorrow|now|currently|please)/i,
+    /(?:in|at|for|of)\s+([a-zA-Z\s]+?)\s+(?:weather|forecast|temperature|temp|rain)/i,
+    /\b([a-zA-Z]+)\s+(?:weather|forecast|temp|temperature|rain)\b/i
+  ];
+  for (const p of locationPatterns) {
+    const match = userText.match(p);
+    if (match) {
+      const candidate = match[1]?.trim();
+      if (candidate && !['today', 'tomorrow', 'now', 'the', 'a', 'an', 'this', 'next', 'me', 'us', 'what', 'how'].includes(candidate.toLowerCase())) {
+        location = candidate;
+        break;
       }
     }
   }
@@ -736,18 +728,18 @@ function showResponseCallouts(response) {
     }
   } else if (avatarContainer) {
     // Multiple sentences or code shared: distribute circularly around visualizer (radius D)
-    const D = 230; // Radius outside 400x400 canvas (which has 200px radius)
+    const D = 280; // Radius outside 400x400 canvas (which has 200px radius)
     let angles = [];
     const N = sentences.length;
 
     if (N === 2) {
-      angles = [-130, -50];
+      angles = [-140, -40];
     } else if (N === 3) {
-      angles = [-140, -90, -40];
+      angles = [-150, -90, -30];
     } else if (N === 4) {
-      angles = [-140, -90, -40, 30];
+      angles = [-150, -90, -30, 40];
     } else {
-      angles = [-140, -90, -40, 30, 150];
+      angles = [-150, -90, -30, 40, 140];
     }
 
     sentences.slice(0, angles.length).forEach((sentence, idx) => {
@@ -765,13 +757,13 @@ function showResponseCallouts(response) {
       
       // Bubble tail tail-shape pointing towards the center
       if (angleDeg < -90) {
-        div.style.borderRadius = '20px 20px 20px 2px';
+        div.style.borderRadius = '20px 20px 2px 20px'; // Top-left quadrant -> tail bottom-right
       } else if (angleDeg < 0) {
-        div.style.borderRadius = '20px 20px 2px 20px';
+        div.style.borderRadius = '20px 20px 20px 2px'; // Top-right quadrant -> tail bottom-left
       } else if (angleDeg < 90) {
-        div.style.borderRadius = '2px 20px 20px 20px';
+        div.style.borderRadius = '2px 20px 20px 20px'; // Bottom-right quadrant -> tail top-left
       } else {
-        div.style.borderRadius = '20px 2px 20px 20px';
+        div.style.borderRadius = '20px 2px 20px 20px'; // Bottom-left quadrant -> tail top-right
       }
 
       avatarContainer.appendChild(div);

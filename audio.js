@@ -331,6 +331,18 @@ export class AudioEngine {
           }, this.SILENCE_DELAY);
         };
 
+        this.recognition.onstart = () => {
+          console.log('🎤 Speech recognition started');
+          this.networkRetryActive = false;
+          const userCallout = document.getElementById('user-callout');
+          if (userCallout && userCallout.innerHTML.includes('Connection lost')) {
+            userCallout.classList.remove('visible');
+            setTimeout(() => {
+              userCallout.classList.add('hidden');
+              userCallout.innerHTML = '';
+            }, 300);
+          }
+        };
         this.recognition.onerror = (e) => {
           console.warn('Speech recog error:', e.error);
           if (e.error === 'network') {
@@ -339,6 +351,17 @@ export class AudioEngine {
               userCallout.innerHTML = `<span class="hearing-indicator">📡</span> Connection lost. Reconnecting...`;
               userCallout.classList.remove('hidden');
               userCallout.classList.add('visible');
+              
+              // Auto-hide the connection lost banner after 4 seconds
+              setTimeout(() => {
+                if (userCallout && userCallout.innerHTML.includes('Connection lost')) {
+                  userCallout.classList.remove('visible');
+                  setTimeout(() => {
+                    userCallout.classList.add('hidden');
+                    userCallout.innerHTML = '';
+                  }, 300);
+                }
+              }, 4000);
             }
             this.networkRetryActive = true;
           }
