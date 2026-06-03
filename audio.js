@@ -19,6 +19,21 @@ let currentBotAnalyser = null;
 // Global flag that app.js can check
 export let isBotSpeaking = false;
 
+// Handle background WebGPU crashes from ONNX Runtime that bypass try/catch
+window.addEventListener('unhandledrejection', (event) => {
+  const msg = (event.reason && event.reason.message) || String(event.reason);
+  if (msg.includes('Device') && msg.includes('lost')) {
+    console.warn('🛑 Caught unhandled WebGPU device loss, forcing WASM fallback.');
+    event.preventDefault();
+    if (useWebGPU) {
+      useWebGPU = false;
+      kokoroTTS = null;
+      kokoroLoadPromise = null;
+      loadKokoro().catch(() => {});
+    }
+  }
+});
+
 async function checkWebGPUSupport() {
   if (!window.isSecureContext) return false;
   if (!navigator.gpu) return false;
