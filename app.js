@@ -465,9 +465,19 @@ async function getWeatherInfo(userText) {
       console.warn(`🌤️ No geocoding results for "${location}"`);
       return null;
     }
-    
-    // Sort by population to pick the most prominent city
-    geoData.results.sort((a, b) => (b.population || 0) - (a.population || 0));
+    // Prioritize India or the user's detected country, otherwise keep API's default relevance order
+    geoData.results.sort((a, b) => {
+      const aIsIndia = (a.country === 'India' || a.country_code === 'IN') ? 1 : 0;
+      const bIsIndia = (b.country === 'India' || b.country_code === 'IN') ? 1 : 0;
+      if (aIsIndia !== bIsIndia) return bIsIndia - aIsIndia;
+
+      if (state.location && state.location.country) {
+        const aIsLocal = (a.country === state.location.country || a.country_code === state.location.country) ? 1 : 0;
+        const bIsLocal = (b.country === state.location.country || b.country_code === state.location.country) ? 1 : 0;
+        if (aIsLocal !== bIsLocal) return bIsLocal - aIsLocal;
+      }
+      return 0;
+    });
     const { latitude, longitude, country } = geoData.results[0];
 
     const weatherRes = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current_weather=true`);
