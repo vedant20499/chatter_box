@@ -356,7 +356,7 @@ export class AudioEngine {
               if (this.isRunning && !isSpeaking) {
                 try { this.recognition.start(); } catch (err) {}
               }
-            }, 50);
+            }, 5);
           }
         };
         this.recognition.start();
@@ -465,7 +465,8 @@ export class AudioEngine {
 
   soundClassifyLoop() {
     setInterval(() => {
-      if (!this.isRunning || isSpeaking) return;
+      // Do not classify music if the bot is speaking OR if we currently hear the user speaking (interim text exists)
+      if (!this.isRunning || isSpeaking || this.lastInterimTranscript.trim().length > 0) return;
       const bufferLength = this.analyser.frequencyBinCount;
       const dataArray = new Uint8Array(bufferLength);
       this.analyser.getByteFrequencyData(dataArray);
