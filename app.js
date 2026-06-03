@@ -418,9 +418,9 @@ async function getWeatherInfo(userText) {
   let location = null;
   
   const locationPatterns = [
-    /(?:weather|forecast|temperature|temp|rain)\s+(?:in|at|for|of)\s+([a-zA-Z\s]+?)(?:\?|$|today|tomorrow|now|currently|please)/i,
-    /(?:in|at|for|of)\s+([a-zA-Z\s]+?)\s+(?:weather|forecast|temperature|temp|rain)/i,
-    /\b([a-zA-Z]+)\s+(?:weather|forecast|temp|temperature|rain)\b/i
+    /(?:weather|forecast|temperature|temp|rain)\s+(?:in|at|for|of)\s+([a-zA-Z\s,]+?)(?:\?|$|today|tomorrow|now|currently|please)/i,
+    /(?:in|at|for|of)\s+([a-zA-Z\s,]+?)\s+(?:weather|forecast|temperature|temp|rain)/i,
+    /\b([a-zA-Z,]+)\s+(?:weather|forecast|temp|temperature|rain)\b/i
   ];
   for (const p of locationPatterns) {
     const match = userText.match(p);
@@ -458,13 +458,16 @@ async function getWeatherInfo(userText) {
   }
 
   try {
-    const geoRes = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(location)}&count=1&language=en&format=json`);
+    const geoRes = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(location)}&count=5&language=en&format=json`);
     if (!geoRes.ok) throw new Error(`Geocoding failed (${geoRes.status})`);
     const geoData = await geoRes.json();
     if (!geoData.results?.length) {
       console.warn(`🌤️ No geocoding results for "${location}"`);
       return null;
     }
+    
+    // Sort by population to pick the most prominent city
+    geoData.results.sort((a, b) => (b.population || 0) - (a.population || 0));
     const { latitude, longitude, country } = geoData.results[0];
 
     const weatherRes = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current_weather=true`);

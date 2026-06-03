@@ -281,7 +281,11 @@ export class AudioEngine {
       this.drawWaves();
       this.soundClassifyLoop();
 
-      loadKokoro().catch(e => console.warn('Background Kokoro load:', e.message));
+      try {
+        await loadKokoro();
+      } catch(e) {
+        console.warn('Background Kokoro load failed, using fallback:', e.message);
+      }
 
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       if (SpeechRecognition) {
@@ -368,7 +372,7 @@ export class AudioEngine {
         };
         this.recognition.onend = () => {
           if (this.isRunning && !isSpeaking) {
-            const delay = this.networkRetryActive ? 2000 : 50;
+            const delay = this.networkRetryActive ? 5000 : 50;
             this.networkRetryActive = false;
             setTimeout(() => {
               if (this.isRunning && !isSpeaking) {
@@ -495,7 +499,7 @@ export class AudioEngine {
       }
       const lowMidAvg = lowMidSum / range;
 
-      if (lowMidAvg > 15 && Math.random() < 0.15 && !this.musicCooldown) {
+      if (lowMidAvg > 45 && Math.random() < 0.05 && !this.musicCooldown) {
         if (this.onUserSpeech) this.onUserSpeech('__MUSIC_DETECTED__');
         this.musicCooldown = true;
         setTimeout(() => { this.musicCooldown = false; }, 30000);
