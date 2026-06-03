@@ -349,36 +349,14 @@ export class AudioEngine {
         };
         this.recognition.onerror = (e) => {
           console.warn('Speech recog error:', e.error);
-          if (e.error === 'network') {
-            const userCallout = document.getElementById('user-callout');
-            if (userCallout) {
-              userCallout.innerHTML = `<span class="hearing-indicator">📡</span> Connection lost. Reconnecting...`;
-              userCallout.classList.remove('hidden');
-              userCallout.classList.add('visible');
-              
-              // Auto-hide the connection lost banner after 4 seconds
-              setTimeout(() => {
-                if (userCallout && userCallout.innerHTML.includes('Connection lost')) {
-                  userCallout.classList.remove('visible');
-                  setTimeout(() => {
-                    userCallout.classList.add('hidden');
-                    userCallout.innerHTML = '';
-                  }, 300);
-                }
-              }, 4000);
-            }
-            this.networkRetryActive = true;
-          }
         };
         this.recognition.onend = () => {
           if (this.isRunning && !isSpeaking) {
-            const delay = this.networkRetryActive ? 5000 : 50;
-            this.networkRetryActive = false;
             setTimeout(() => {
               if (this.isRunning && !isSpeaking) {
                 try { this.recognition.start(); } catch (err) {}
               }
-            }, delay);
+            }, 50);
           }
         };
         this.recognition.start();
