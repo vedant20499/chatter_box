@@ -12,16 +12,21 @@
 </head>
 <body class="light">
   <div id="app">
+    <button id="settings-btn">⚙️</button>
     <div id="avatar-container">
       <div id="bot-callout" class="callout hidden"></div>
-      <canvas id="wave-canvas" width="300" height="300"></canvas>
+      <canvas id="wave-canvas" width="400" height="400"></canvas>
       <div id="face-circle">😊</div>
+    </div>
+    <!-- Big Scrollable Callout -->
+    <div id="big-callout" class="hidden">
+      <button class="copy-btn" id="btn-copy-code">Copy Code</button>
+      <div class="big-callout-content" id="big-callout-text"></div>
     </div>
     <div id="user-callout" class="callout hidden"></div>
     <div id="user-panel">
       <img id="user-avatar" src="" alt="User" style="display:none;">
       <span id="user-name-display"></span>
-      <button id="settings-btn">⚙️</button>
       <button id="btn-instagram" style="display:none;">📷 Instagram</button>
       <button id="btn-spotify" style="display:none;">🎵 Spotify</button>
     </div>

@@ -171,6 +171,7 @@ function cleanTextForTTS(text) {
     .replace(/\*[^*]+\*/g, '')
     .replace(/\[.*?\]/g, '')
     .replace(/\(.*?\)/g, '')
+    .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '')
     .replace(/\s{2,}/g, ' ')
     .trim();
 }
@@ -304,12 +305,8 @@ export class AudioEngine {
           if (final) this.lastInterimTranscript = final;
           if (interim) this.lastInterimTranscript = final + interim;
 
-          // Hide bot callout as soon as user starts speaking
-          const botCallout = document.getElementById('bot-callout');
-          if (botCallout) {
-            botCallout.classList.remove('visible');
-            setTimeout(() => botCallout.classList.add('hidden'), 300);
-          }
+          // Clear all bot callouts as soon as user starts speaking
+          window.dispatchEvent(new Event('clearBotCallouts'));
 
           // Show and update user callout at the bottom
           const userCallout = document.getElementById('user-callout');
@@ -334,10 +331,27 @@ export class AudioEngine {
           }, this.SILENCE_DELAY);
         };
 
-        this.recognition.onerror = (e) => console.warn('Speech recog error:', e.error);
+        this.recognition.onerror = (e) => {
+          console.warn('Speech recog error:', e.error);
+          if (e.error === 'network') {
+            const userCallout = document.getElementById('user-callout');
+            if (userCallout) {
+              userCallout.innerHTML = `<span class="hearing-indicator">📡</span> Connection lost. Reconnecting...`;
+              userCallout.classList.remove('hidden');
+              userCallout.classList.add('visible');
+            }
+            this.networkRetryActive = true;
+          }
+        };
         this.recognition.onend = () => {
           if (this.isRunning && !isSpeaking) {
-            try { this.recognition.start(); } catch (e) {}
+            const delay = this.networkRetryActive ? 2000 : 50;
+            this.networkRetryActive = false;
+            setTimeout(() => {
+              if (this.isRunning && !isSpeaking) {
+                try { this.recognition.start(); } catch (err) {}
+              }
+            }, delay);
           }
         };
         this.recognition.start();
@@ -381,40 +395,64 @@ export class AudioEngine {
         this.analyser.getByteTimeDomainData(dataArray);
       }
 
-      // Draw standard background ring
+      // Calculate RMS volume to scale the wave amplitude dynamically
+      let sumSq = 0;
+      for (let i = 0; i < bufferLength; i++) {
+        const val = (dataArray[i] - 128) / 128;
+        sumSq += val * val;
+      }
+      const rms = Math.sqrt(sumSq / bufferLength);
+      const volume = Math.min(1.0, rms * 4.0); // scale sensitivity
+      
+      const baseRadius = 115; // Larger base radius to clear the face-circle
+      const targetAmplitude = 4 + volume * 50; // Dynamic amplitude with 4px baseline
+      
+      const time = Date.now() * 0.003;
+      
+      // 3 overlapping sinusoidal waves with different colors, speeds, frequencies
+      const waves = [
+        { color: 'rgba(0, 230, 118, 0.75)', freq: 3, speed: 1.5, ampMult: 1.0, phaseShift: 0 },
+        { color: 'rgba(0, 188, 212, 0.85)', freq: 4, speed: -1.2, ampMult: 0.8, phaseShift: Math.PI / 3 },
+        { color: 'rgba(33, 150, 243, 0.65)', freq: 2, speed: 2.0, ampMult: 0.6, phaseShift: Math.PI * 2 / 3 }
+      ];
+
+      // Draw background ring (slightly larger)
       ctx.beginPath();
-      ctx.arc(width / 2, height / 2, 105, 0, Math.PI * 2);
-      ctx.strokeStyle = 'rgba(0, 188, 212, 0.08)';
+      ctx.arc(width / 2, height / 2, baseRadius, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(0, 188, 212, 0.05)';
       ctx.lineWidth = 1;
       ctx.stroke();
 
-      // Draw dynamic visualizer wave around face avatar
-      ctx.shadowBlur = 8;
-      ctx.shadowColor = '#00bcd4';
-      ctx.beginPath();
-      
-      const baseRadius = 105;
-      const maxAmplitude = 30;
-
-      for (let i = 0; i < bufferLength; i++) {
-        const angle = (i / bufferLength) * Math.PI * 2;
-        const offset = (dataArray[i] - 128) / 128.0;
-        const r = baseRadius + offset * maxAmplitude;
+      waves.forEach((w) => {
+        ctx.beginPath();
+        ctx.strokeStyle = w.color;
+        ctx.lineWidth = 3;
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = w.color;
         
-        const x = width / 2 + Math.cos(angle) * r;
-        const y = height / 2 + Math.sin(angle) * r;
-        
-        if (i === 0) {
-          ctx.moveTo(x, y);
-        } else {
-          ctx.lineTo(x, y);
+        const numPoints = 120;
+        for (let i = 0; i <= numPoints; i++) {
+          const theta = (i / numPoints) * Math.PI * 2;
+          
+          // Generate a smooth sinusoidal pattern periodic in 2*pi
+          const waveVal = Math.sin(w.freq * theta + time * w.speed + w.phaseShift) * 
+                          Math.cos(2 * theta - time * w.speed * 0.5);
+                          
+          const amp = targetAmplitude * w.ampMult;
+          const r = baseRadius + waveVal * amp;
+          
+          const x = width / 2 + Math.cos(theta) * r;
+          const y = height / 2 + Math.sin(theta) * r;
+          
+          if (i === 0) {
+            ctx.moveTo(x, y);
+          } else {
+            ctx.lineTo(x, y);
+          }
         }
-      }
-      
-      ctx.closePath();
-      ctx.lineWidth = 3;
-      ctx.strokeStyle = '#00bcd4';
-      ctx.stroke();
+        ctx.closePath();
+        ctx.stroke();
+      });
       ctx.shadowBlur = 0;
     };
     draw();
@@ -427,11 +465,14 @@ export class AudioEngine {
       const dataArray = new Uint8Array(bufferLength);
       this.analyser.getByteFrequencyData(dataArray);
 
-      let sum = 0;
-      for (let i = 0; i < bufferLength; i++) sum += dataArray[i];
-      const avg = sum / bufferLength;
+      let lowMidSum = 0;
+      const range = Math.min(bufferLength, 64);
+      for (let i = 0; i < range; i++) {
+        lowMidSum += dataArray[i];
+      }
+      const lowMidAvg = lowMidSum / range;
 
-      if (avg > 35 && Math.random() < 0.15 && !this.musicCooldown) {
+      if (lowMidAvg > 15 && Math.random() < 0.15 && !this.musicCooldown) {
         if (this.onUserSpeech) this.onUserSpeech('__MUSIC_DETECTED__');
         this.musicCooldown = true;
         setTimeout(() => { this.musicCooldown = false; }, 30000);

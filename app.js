@@ -293,9 +293,10 @@ async function startMain() {
 
   window.addEventListener('botFinishedSpeaking', () => {
     lastSpeechTime = Date.now();
-    // Reset face back to default smiley after bot finishes speaking
-    const face = document.getElementById('face-circle');
-    if (face) face.textContent = '😊';
+  });
+
+  window.addEventListener('clearBotCallouts', () => {
+    clearBotCallouts();
   });
 
   window.addEventListener('beforeunload', () => {
@@ -348,19 +349,7 @@ async function handleUserSpeech(transcript) {
 
   console.log('🤖 Bot:', response);
 
-  // Parse expression to change emoji, clean the text and display it in bot callout
-  const parsed = parseExpression(response);
-  const face = document.getElementById('face-circle');
-  if (face) face.textContent = parsed.emoji;
-
-  const botCallout = document.getElementById('bot-callout');
-  if (botCallout) {
-    botCallout.textContent = parsed.cleanedText;
-    botCallout.classList.remove('hidden');
-    setTimeout(() => botCallout.classList.add('visible'), 50);
-  }
-
-  audioEngine.speak(parsed.cleanedText, state.character);
+  showResponseCallouts(response);
 
   state.compactedContext.push({ role: 'user', content: transcript });
   state.compactedContext.push({ role: 'assistant', content: response });
@@ -419,31 +408,52 @@ async function getContextualInjection(userText) {
 // Results are cached per location name for 30 minutes.
 // ---------------------------------------------------------------------------
 async function getWeatherInfo(userText) {
-  const weatherPatterns = [
-    /weather\s+(?:in|at|for)\s+([a-zA-Z\s]+?)(?:\?|$)/i,
-    /what'?s?\s+the\s+weather\s+(?:in|at|for)\s+([a-zA-Z\s]+?)(?:\?|$)/i,
-    /weather\s+([a-zA-Z\s]+?)(?:\?|$)/i
-  ];
+  const lower = userText.toLowerCase();
+  
+  // List of keywords to check if user is asking about weather
+  const weatherKeywords = ['weather', 'temp', 'temperature', 'rain', 'raining', 'forecast', 'climate', 'windy', 'cloudy', 'sunny'];
+  const isAskingWeather = weatherKeywords.some(k => lower.includes(k));
+  if (!isAskingWeather) return null;
 
-  // Check if any weather pattern matches
   let location = null;
-  for (const p of weatherPatterns) {
-    const match = userText.match(p);
-    if (match) {
-      location = match[1]?.trim() || null;
-      break;
+  
+  // 1. Try reverse location match like: "Bengaluru weather"
+  const reverseMatch = userText.match(/\b([a-zA-Z\s]+?)\s+(?:weather|forecast|temp|temperature|rain)\b/i);
+  if (reverseMatch) {
+    location = reverseMatch[1].trim();
+  }
+  
+  // 2. Try forward location match like: "weather in Bengaluru"
+  if (!location) {
+    const locationPatterns = [
+      /(?:in|at|for|of)\s+([a-zA-Z\s]+?)(?:\?|$|today|tomorrow|now|currently|please)/i,
+      /(?:weather|forecast|temperature|temp|rain)\s+([a-zA-Z\s]+?)(?:\?|$|today|tomorrow|now|currently|please)/i
+    ];
+    for (const p of locationPatterns) {
+      const match = userText.match(p);
+      if (match) {
+        const candidate = match[1]?.trim();
+        if (candidate && !['today', 'tomorrow', 'now', 'the', 'a', 'an', 'this', 'next', 'me', 'us'].includes(candidate.toLowerCase())) {
+          location = candidate;
+          break;
+        }
+      }
     }
   }
 
-  // If no weather pattern matched at all, return null – user didn't ask about weather
-  if (location === null && !weatherPatterns.some(p => p.test(userText))) {
-    return null;
+  // Clean up location from common words
+  if (location) {
+    location = location
+      .replace(/\b(today|tomorrow|now|please|right\s+now|currently|forecast|temp|temperature|weather|report|conditions|the|this|next|like|is|how|what|what's)\b/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
-  // User asked about weather but maybe without a location – use default city
+  // Fallback to detected state location
   if (!location && state.location) {
     location = state.location.city;
   }
+
   if (!location) return null;
 
   const cacheKey = location.toLowerCase();
@@ -543,19 +553,7 @@ async function proactiveChat() {
     { role: 'user', content: prompt }
   ]);
   if (response) {
-    // Parse expression for proactive response
-    const parsed = parseExpression(response);
-    const face = document.getElementById('face-circle');
-    if (face) face.textContent = parsed.emoji;
-
-    const botCallout = document.getElementById('bot-callout');
-    if (botCallout) {
-      botCallout.textContent = parsed.cleanedText;
-      botCallout.classList.remove('hidden');
-      setTimeout(() => botCallout.classList.add('visible'), 50);
-    }
-
-    audioEngine.speak(parsed.cleanedText, state.character);
+    showResponseCallouts(response);
     state.compactedContext.push({ role: 'assistant', content: response });
     console.log('🤖 Proactive:', response);
   }
@@ -608,4 +606,181 @@ async function saveStateToKV() {
       body: JSON.stringify({ uuid: state.uuid, state: state.toJSON() }),
     });
   } catch (e) {}
+}
+
+// ---------------------------------------------------------------------------
+// Callout Management (Multiple circular and big scrollable callouts)
+// ---------------------------------------------------------------------------
+function clearBotCallouts() {
+  const botCallout = document.getElementById('bot-callout');
+  if (botCallout) {
+    botCallout.classList.remove('visible');
+    setTimeout(() => botCallout.classList.add('hidden'), 300);
+  }
+  
+  const bigCallout = document.getElementById('big-callout');
+  if (bigCallout) {
+    bigCallout.classList.remove('visible');
+    setTimeout(() => bigCallout.classList.add('hidden'), 300);
+  }
+
+  const avatarContainer = document.getElementById('avatar-container');
+  if (avatarContainer) {
+    const circulars = avatarContainer.querySelectorAll('.circular-callout');
+    circulars.forEach(el => {
+      el.classList.remove('visible');
+      setTimeout(() => el.remove(), 300);
+    });
+  }
+}
+
+function extractCodeAndText(text) {
+  const codeRegex = /```([\s\S]*?)```/g;
+  let match;
+  const codeBlocks = [];
+  
+  while ((match = codeRegex.exec(text)) !== null) {
+    codeBlocks.push(match[1].trim());
+  }
+  
+  const plainText = text.replace(/```[\s\S]*?```/g, '').trim();
+  return { codeBlocks, plainText };
+}
+
+function formatCodeBlock(code) {
+  const lines = code.split('\n');
+  if (lines.length > 0 && /^[a-zA-Z0-9+#-]+$/.test(lines[0].trim())) {
+    lines.shift();
+  }
+  return lines.join('\n');
+}
+
+function splitIntoSentences(text) {
+  // Strip action expressions (*smiles*, [laughs])
+  let clean = text.replace(/[\*\[\(][^*\]\)]+[\*\]\)]/g, '').trim();
+  
+  // Split by sentence ending punctuation followed by space
+  const sentences = clean.split(/(?<=[.!?])\s+/);
+  return sentences
+    .map(s => s.trim())
+    .filter(s => s.length > 3);
+}
+
+function showResponseCallouts(response) {
+  // 1. Clear any existing callouts
+  clearBotCallouts();
+
+  // 2. Parse expression to change face emoji
+  const parsed = parseExpression(response);
+  const face = document.getElementById('face-circle');
+  if (face) face.textContent = parsed.emoji;
+
+  // 3. Extract code blocks and plain text
+  const { codeBlocks, plainText } = extractCodeAndText(parsed.cleanedText);
+  const hasCode = codeBlocks.length > 0;
+  const isLongText = plainText.length > 220;
+
+  // Handle Big Callout if code exists or dialogue is very long
+  const bigCallout = document.getElementById('big-callout');
+  const bigCalloutText = document.getElementById('big-callout-text');
+  const copyBtn = document.getElementById('btn-copy-code');
+
+  if (bigCallout && bigCalloutText) {
+    if (hasCode || isLongText) {
+      let contentHtml = '';
+      if (hasCode) {
+        contentHtml += `<p>${plainText}</p>`;
+        codeBlocks.forEach(code => {
+          const formatted = formatCodeBlock(code);
+          contentHtml += `<pre><code>${formatted.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code></pre>`;
+        });
+        
+        // Setup copy button
+        if (copyBtn) {
+          copyBtn.style.display = 'block';
+          copyBtn.onclick = () => {
+            const combinedCode = codeBlocks.map(formatCodeBlock).join('\n\n');
+            navigator.clipboard.writeText(combinedCode).then(() => {
+              copyBtn.textContent = 'Copied! ✅';
+              setTimeout(() => { copyBtn.textContent = 'Copy Code'; }, 2000);
+            });
+          };
+        }
+      } else {
+        contentHtml += `<p>${plainText}</p>`;
+        if (copyBtn) copyBtn.style.display = 'none';
+      }
+
+      bigCalloutText.innerHTML = contentHtml;
+      bigCallout.classList.remove('hidden');
+      setTimeout(() => bigCallout.classList.add('visible'), 50);
+    } else {
+      bigCallout.classList.remove('visible');
+      setTimeout(() => bigCallout.classList.add('hidden'), 300);
+    }
+  }
+
+  // 4. Render text callout(s)
+  // If we have code, we show the associated plain text inside the circular arrangement.
+  // Otherwise, split the text into sentences for circular distribution.
+  const sentences = splitIntoSentences(plainText);
+  const avatarContainer = document.getElementById('avatar-container');
+
+  if (sentences.length <= 1 && !hasCode) {
+    // Single short sentence: show standard top bot-callout
+    const botCallout = document.getElementById('bot-callout');
+    if (botCallout && sentences.length > 0) {
+      botCallout.textContent = sentences[0];
+      botCallout.classList.remove('hidden');
+      setTimeout(() => botCallout.classList.add('visible'), 50);
+    }
+  } else if (avatarContainer) {
+    // Multiple sentences or code shared: distribute circularly around visualizer (radius D)
+    const D = 230; // Radius outside 400x400 canvas (which has 200px radius)
+    let angles = [];
+    const N = sentences.length;
+
+    if (N === 2) {
+      angles = [-130, -50];
+    } else if (N === 3) {
+      angles = [-140, -90, -40];
+    } else if (N === 4) {
+      angles = [-140, -90, -40, 30];
+    } else {
+      angles = [-140, -90, -40, 30, 150];
+    }
+
+    sentences.slice(0, angles.length).forEach((sentence, idx) => {
+      const angleDeg = angles[idx];
+      const angleRad = (angleDeg * Math.PI) / 180;
+      
+      const x = 100 + D * Math.cos(angleRad);
+      const y = 100 + D * Math.sin(angleRad);
+      
+      const div = document.createElement('div');
+      div.className = 'circular-callout';
+      div.textContent = sentence;
+      div.style.left = `${x}px`;
+      div.style.top = `${y}px`;
+      
+      // Bubble tail tail-shape pointing towards the center
+      if (angleDeg < -90) {
+        div.style.borderRadius = '20px 20px 20px 2px';
+      } else if (angleDeg < 0) {
+        div.style.borderRadius = '20px 20px 2px 20px';
+      } else if (angleDeg < 90) {
+        div.style.borderRadius = '2px 20px 20px 20px';
+      } else {
+        div.style.borderRadius = '20px 2px 20px 20px';
+      }
+
+      avatarContainer.appendChild(div);
+      setTimeout(() => {
+        div.classList.add('visible');
+      }, 50 + idx * 100);
+    });
+  }
+
+  // 5. Speak the conversational (plain text) part
+  audioEngine.speak(plainText, state.character);
 }
